@@ -1,0 +1,11 @@
+files/*
+.DS_Store
+node_modules
+output
+build/
+npm-debug.log
+.venv
+/.venv
+/src/files/*.mp3
+/src/files/*.mp4
+/src/files/
