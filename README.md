@@ -1,6 +1,6 @@
 # PodPy
 
-A small Python prototype for creating an audio-driven multicam edit from two synced video sources and two audio sources.
+A small Unix-type Python prototype for creating an audio-driven multicam edit from two synced video sources and two audio sources.
 
 The script analyzes the audio tracks, estimates sync offsets, decides which camera should be active based on microphone activity, exports a JSON cut list, and renders a final video with FFmpeg.
 
