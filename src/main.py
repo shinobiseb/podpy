@@ -1,104 +1,136 @@
-import subprocess
-import tempfile
-from pathlib import Path
-
-from audio import aligned_audio_filter, prepare_audio
-from camera import choose_camera_by_activity, export_camera_cuts
-from config import (
-    AUDIO1,
-    AUDIO2,
-    CUTS_JSON,
-    ENVELOPE_RATE,
-    MIN_CORRELATION,
-    OUTPUT,
-    VIDEO,
-    VIDEO2,
-)
-from media import extract_analysis_wav, probe_duration, probe_video_size
-from rendering import render_video
-from sync import estimate_and_check
+from audio import aligned_audio_filter
+from config import OUTPUT_FPS
+from media import run
 
 
-def validate_inputs():
-    for path in (VIDEO, VIDEO2, AUDIO1, AUDIO2):
-        if not Path(path).exists():
-            raise FileNotFoundError(path)
+def aligned_video_filter(input_index, shift, duration, width, height, label):
+    """Build the filter that aligns one camera picture to VIDEO's timeline."""
+    filters = ["setpts=PTS-STARTPTS"]
 
-
-def main():
-    validate_inputs()
-
-    with tempfile.TemporaryDirectory() as temp_dir:
-        temp_dir = Path(temp_dir)
-        processed_audio1 = prepare_audio(
-            AUDIO1, temp_dir / "audio1_processed.wav"
-        )
-        processed_audio2 = prepare_audio(
-            AUDIO2, temp_dir / "audio2_processed.wav"
+    if shift >= 0:
+        filters.append(f"trim=start={shift:.6f}")
+    else:
+        filters.append(
+            f"tpad=start_mode=clone:start_duration={abs(shift):.6f}"
         )
 
-        video_duration = probe_duration(VIDEO)
-        width, height = probe_video_size(VIDEO)
+    filters.extend([
+        "setpts=PTS-STARTPTS",
+        f"tpad=stop_mode=clone:stop_duration={duration:.6f}",
+        f"trim=duration={duration:.6f}",
+        f"scale={width}:{height}:force_original_aspect_ratio=decrease",
+        f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2",
+        "setsar=1",
+        f"fps={OUTPUT_FPS}",
+        "format=yuv420p",
+    ])
+    return f"[{input_index}:v:0]{','.join(filters)}[{label}]"
 
-        video_wav = temp_dir / "video_audio.wav"
-        video2_wav = temp_dir / "video2_audio.wav"
-        audio1_wav = temp_dir / "audio1.wav"
-        audio2_wav = temp_dir / "audio2.wav"
 
-        print("Extracting analysis audio...")
-        try:
-            extract_analysis_wav(VIDEO, video_wav)
-        except subprocess.CalledProcessError as exc:
-            raise SystemExit(
-                "Could not extract audio from VIDEO. This workflow needs "
-                "VIDEO's embedded audio as its sync reference."
-            ) from exc
+def camera_cut_filters(camera_by_frame, duration, envelope_rate):
+    """Build a concat graph switching cameras according to per-frame choices."""
+    frame_count = len(camera_by_frame)
+    if frame_count == 0:
+        raise ValueError("No camera-selection frames were generated")
 
-        try:
-            extract_analysis_wav(VIDEO2, video2_wav)
-        except subprocess.CalledProcessError as exc:
-            raise SystemExit(
-                "Could not extract audio from VIDEO2. This workflow uses "
-                "VIDEO2's embedded audio to sync its picture to VIDEO."
-            ) from exc
+    boundaries = [
+        i for i in range(1, frame_count)
+        if camera_by_frame[i] != camera_by_frame[i - 1]
+    ]
+    starts = [0, *boundaries]
+    ends = [*boundaries, frame_count]
 
-        extract_analysis_wav(processed_audio1, audio1_wav)
-        extract_analysis_wav(processed_audio2, audio2_wav)
+    count_by_camera = {
+        1: sum(camera_by_frame[start] == 1 for start in starts),
+        2: sum(camera_by_frame[start] == 2 for start in starts),
+    }
+    filters = []
 
-        video2_shift = estimate_and_check(
-            video_wav, video2_wav, "VIDEO2", MIN_CORRELATION
+    for camera_number in (1, 2):
+        count = count_by_camera[camera_number]
+        if count:
+            label = f"v{camera_number}"
+            filters.append(
+                f"[{label}]split={count}"
+                + "".join(f"[{label}s{i}]" for i in range(count))
+            )
+
+    camera_indices = {1: 0, 2: 0}
+    segment_labels = []
+
+    for segment_number, (start_frame, end_frame) in enumerate(zip(starts, ends)):
+        start = start_frame / envelope_rate
+        end = min(end_frame / envelope_rate, duration)
+        segment_duration = end - start
+        camera_number = int(camera_by_frame[start_frame])
+        source = f"[v{camera_number}s{camera_indices[camera_number]}]"
+        camera_indices[camera_number] += 1
+        label = f"segment{segment_number}"
+
+        filters.append(
+            f"{source}trim=start={start:.6f}:duration={segment_duration:.6f},"
+            f"setpts=PTS-STARTPTS[{label}]"
         )
-        shift1 = estimate_and_check(
-            video_wav, audio1_wav, "AUDIO1", MIN_CORRELATION
-        )
-        shift2 = estimate_and_check(
-            video_wav, audio2_wav, "AUDIO2", MIN_CORRELATION
-        )
+        segment_labels.append(f"[{label}]")
 
-        camera_by_frame = choose_camera_by_activity(
-            audio1_wav, audio2_wav, shift1, shift2, video_duration
-        )
-        export_camera_cuts(CUTS_JSON, camera_by_frame, video_duration)
-
-        render_video(
-            VIDEO,
-            processed_audio1,
-            processed_audio2,
-            VIDEO2,
-            OUTPUT,
-            video_duration,
-            width,
-            height,
-            shift1,
-            shift2,
-            video2_shift,
-            camera_by_frame,
-            aligned_audio_filter,
-            ENVELOPE_RATE,
-        )
-
-    print(f"Done: {OUTPUT}")
+    filters.append(
+        f"{''.join(segment_labels)}concat=n={len(segment_labels)}:v=1:a=0[vout]"
+    )
+    return ";".join(filters)
 
 
-if __name__ == "__main__":
-    main()
+def render_video(
+    video1,
+    audio1,
+    audio2,
+    video2,
+    output,
+    duration,
+    width,
+    height,
+    shift1,
+    shift2,
+    video2_shift,
+    camera_by_frame,
+    envelope_rate,
+):
+    """Construct the FFmpeg graph and render the switched video."""
+    audio1_filter = aligned_audio_filter(1, shift1, duration)
+    audio2_filter = aligned_audio_filter(2, shift2, duration)
+    video1_filter = aligned_video_filter(0, 0.0, duration, width, height, "v1")
+    video2_filter = aligned_video_filter(
+        3, video2_shift, duration, width, height, "v2"
+    )
+
+    filter_complex = (
+        f"{audio1_filter}[a1];"
+        f"{audio2_filter}[a2];"
+        "[a1][a2]"
+        "amix=inputs=2:duration=longest:dropout_transition=0:"
+        "weights='1 1':normalize=0,"
+        "alimiter=limit=0.95"
+        "[merged];"
+        f"{video1_filter};"
+        f"{video2_filter};"
+        f"{camera_cut_filters(camera_by_frame, duration, envelope_rate)}"
+    )
+
+    print(f"Writing {output} with activity-driven camera switching...")
+    run([
+        "ffmpeg", "-y",
+        "-i", str(video1),
+        "-i", str(audio1),
+        "-i", str(audio2),
+        "-i", str(video2),
+        "-filter_complex", filter_complex,
+        "-map", "[vout]",
+        "-map", "[merged]",
+        "-t", str(duration),
+        "-c:v", "libx264",
+        "-preset", "fast",
+        "-crf", "18",
+        "-c:a", "aac",
+        "-b:a", "192k",
+        "-movflags", "+faststart",
+        str(output),
+    ])

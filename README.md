@@ -1,54 +1,103 @@
-# PodPy
+import subprocess
+import tempfile
+from pathlib import Path
 
-A small local Python prototype for creating an audio-driven multicam edit from two video sources and two separate audio tracks.
+from audio import prepare_audio
+from camera import choose_camera_by_activity, export_camera_cuts
+from config import (
+    AUDIO1,
+    AUDIO2,
+    CUTS_JSON,
+    ENVELOPE_RATE,
+    MIN_CORRELATION,
+    OUTPUT,
+    VIDEO,
+    VIDEO2,
+)
+from media import extract_analysis_wav, probe_duration, probe_video_size
+from rendering import render_video
+from sync import estimate_and_check
 
-The app checks audio loudness, optionally applies voice processing, estimates sync offsets, chooses the active camera based on microphone activity, exports a JSON cut list, and renders the final video with FFmpeg.
 
-## Project structure
+def validate_inputs():
+    for path in (VIDEO, VIDEO2, AUDIO1, AUDIO2):
+        if not Path(path).exists():
+            raise FileNotFoundError(path)
 
-- `src/main.py` — workflow orchestration and entry point
-- `src/config.py` — input/output paths and processing settings
-- `src/media.py` — FFmpeg/ffprobe helpers and WAV analysis I/O
-- `src/audio.py` — loudness measurement, voice processing, audio alignment filters
-- `src/sync.py` — audio-envelope sync estimation
-- `src/camera.py` — activity detection, camera selection, cut-list export
-- `src/rendering.py` — video filters, camera cuts, final FFmpeg render
-- `requirements.txt` — Python dependencies
 
-## Requirements
+def main():
+    validate_inputs()
 
-- Python 3.9+
-- FFmpeg and ffprobe installed and available in your PATH
-- Dependencies installed in a virtual environment
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_dir = Path(temp_dir)
+        processed_audio1 = prepare_audio(
+            AUDIO1, temp_dir / "audio1_processed.wav"
+        )
+        processed_audio2 = prepare_audio(
+            AUDIO2, temp_dir / "audio2_processed.wav"
+        )
 
-## Setup
+        video_duration = probe_duration(VIDEO)
+        width, height = probe_video_size(VIDEO)
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
+        video_wav = temp_dir / "video_audio.wav"
+        video2_wav = temp_dir / "video2_audio.wav"
+        audio1_wav = temp_dir / "audio1.wav"
+        audio2_wav = temp_dir / "audio2.wav"
 
-## Configure and run
+        print("Extracting analysis audio...")
+        try:
+            extract_analysis_wav(VIDEO, video_wav)
+        except subprocess.CalledProcessError as exc:
+            raise SystemExit(
+                "Could not extract audio from VIDEO. This workflow needs "
+                "VIDEO's embedded audio as its sync reference."
+            ) from exc
 
-Edit the media paths and settings in `src/config.py`:
+        try:
+            extract_analysis_wav(VIDEO2, video2_wav)
+        except subprocess.CalledProcessError as exc:
+            raise SystemExit(
+                "Could not extract audio from VIDEO2. This workflow uses "
+                "VIDEO2's embedded audio to sync its picture to VIDEO."
+            ) from exc
 
-```python
-VIDEO = "src/files/pov_seb.mp4"
-VIDEO2 = "src/files/pov_gus.mp4"
-AUDIO1 = "src/files/pod1_seb.mp3"
-AUDIO2 = "src/files/pod1_gus.mp3"
-OUTPUT = "Synced_video.mp4"
-```
+        extract_analysis_wav(processed_audio1, audio1_wav)
+        extract_analysis_wav(processed_audio2, audio2_wav)
 
-Run the workflow from the repository root:
+        video2_shift = estimate_and_check(
+            video_wav, video2_wav, "VIDEO2", MIN_CORRELATION
+        )
+        shift1 = estimate_and_check(
+            video_wav, audio1_wav, "AUDIO1", MIN_CORRELATION
+        )
+        shift2 = estimate_and_check(
+            video_wav, audio2_wav, "AUDIO2", MIN_CORRELATION
+        )
 
-```bash
-python src/main.py
-```
+        camera_by_frame = choose_camera_by_activity(
+            audio1_wav, audio2_wav, shift1, shift2, video_duration
+        )
+        export_camera_cuts(CUTS_JSON, camera_by_frame, video_duration)
 
-For each audio track, the script measures integrated loudness (LUFS) and true peak (dBTP). It uses the original if it is within the configured LUFS tolerance and below the true-peak ceiling; otherwise it makes a processed temporary WAV. The processed/original prepared tracks are used consistently for sync analysis, activity detection, and the final render. Temporary audio is removed when the run finishes.
+        render_video(
+            VIDEO,
+            processed_audio1,
+            processed_audio2,
+            VIDEO2,
+            OUTPUT,
+            video_duration,
+            width,
+            height,
+            shift1,
+            shift2,
+            video2_shift,
+            camera_by_frame,
+            ENVELOPE_RATE,
+        )
 
-The processing chain (gate, high-pass/EQ, compressor, and loudness normalization) is a starting point, not a universal preset. Tune the parameters in `src/config.py` for the speaker, microphone, and room. Loudness measurement cannot determine whether a gate/EQ/compressor was previously applied; it only checks measured loudness and peak.
+    print(f"Done: {OUTPUT}")
 
-The script writes the final video to `OUTPUT` and a reviewable camera cut list to `CUTS_JSON`.
+
+if __name__ == "__main__":
+    main()
