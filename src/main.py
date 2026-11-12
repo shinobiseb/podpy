@@ -1,5 +1,6 @@
 import json
 import math
+import re
 import subprocess
 import tempfile
 import wave
@@ -29,6 +30,11 @@ MIN_CORRELATION = 0.20
 OUTPUT_AUDIO_RATE = 48000
 OUTPUT_FPS = 30
 
+# Loudness check and processing
+TARGET_LUFS = -16.0
+TARGET_TRUE_PEAK = -1.0
+LOUDNESS_TOLERANCE_LU = 1.0
+
 # Activity-driven camera selection
 ACTIVITY_FLOOR_DBFS = -42.0
 ACTIVITY_ABOVE_NOISE_DB = 10.0
@@ -45,7 +51,7 @@ def probe_duration(path):
         [
             "ffprobe", "-v", "error",
             "-show_entries", "format=duration",
-            "-of", "json", path,
+            "-of", "json", str(path),
         ],
         check=True,
         capture_output=True,
@@ -60,7 +66,7 @@ def probe_video_size(path):
             "ffprobe", "-v", "error",
             "-select_streams", "v:0",
             "-show_entries", "stream=width,height",
-            "-of", "json", path,
+            "-of", "json", str(path),
         ],
         check=True,
         capture_output=True,
@@ -76,21 +82,100 @@ def probe_video_size(path):
     return width, height
 
 
+def measure_loudness(path):
+    """Return (integrated_lufs, true_peak_dbfs) measured by FFmpeg loudnorm."""
+    result = subprocess.run(
+        [
+            "ffmpeg", "-hide_banner", "-nostats",
+            "-i", str(path),
+            "-map", "0:a:0",
+            "-af",
+            (
+                f"loudnorm=I={TARGET_LUFS}:TP={TARGET_TRUE_PEAK}:"
+                "LRA=11:print_format=json"
+            ),
+            "-f", "null", "-",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    # loudnorm prints its measurement JSON to stderr.
+    matches = re.findall(
+        r'\{\s*"input_i".*?\}',
+        result.stderr,
+        flags=re.DOTALL,
+    )
+    if not matches:
+        raise RuntimeError(f"Could not read loudness measurement for {path}")
+
+    stats = json.loads(matches[-1])
+    return float(stats["input_i"]), float(stats["input_tp"])
+
+
+def process_audio(path, output_path):
+    """Apply a gate, EQ, compression, and loudness normalization."""
+    filters = (
+        "agate=threshold=0.01:ratio=2:attack=10:release=150:range=0.1,"
+        "highpass=f=80,"
+        "equalizer=f=250:width_type=q:width=1:gain=-2,"
+        "equalizer=f=3500:width_type=q:width=1:gain=2,"
+        "acompressor=threshold=0.125:ratio=3:attack=10:release=100:makeup=1,"
+        f"loudnorm=I={TARGET_LUFS}:TP={TARGET_TRUE_PEAK}:LRA=11"
+    )
+
+    run([
+        "ffmpeg", "-y", "-v", "error",
+        "-i", str(path),
+        "-map", "0:a:0",
+        "-af", filters,
+        "-c:a", "pcm_s24le",
+        str(output_path),
+    ])
+
+
+def prepare_audio(path, processed_path):
+    """
+    Keep a track if it meets the loudness and peak targets; otherwise process it.
+    Return the path to the audio that should be used by the rest of the script.
+    """
+    integrated_lufs, true_peak = measure_loudness(path)
+    print(
+        f"{path}: {integrated_lufs:.1f} LUFS integrated, "
+        f"{true_peak:.1f} dBTP true peak"
+    )
+
+    loudness_ok = (
+        math.isfinite(integrated_lufs)
+        and abs(integrated_lufs - TARGET_LUFS) <= LOUDNESS_TOLERANCE_LU
+    )
+    peak_ok = math.isfinite(true_peak) and true_peak <= TARGET_TRUE_PEAK
+
+    if loudness_ok and peak_ok:
+        print(f"Using {path} as-is; it meets the loudness check.")
+        return str(path)
+
+    print(f"Processing {path}...")
+    process_audio(path, processed_path)
+    return str(processed_path)
+
+
 def extract_analysis_wav(source, output):
     run([
         "ffmpeg", "-y", "-v", "error",
-        "-i", source,
+        "-i", str(source),
         "-map", "0:a:0",
         "-t", str(ANALYSIS_SECONDS),
         "-ac", "1",
         "-ar", str(ANALYSIS_SAMPLE_RATE),
         "-c:a", "pcm_s16le",
-        output,
+        str(output),
     ])
 
 
 def read_pcm16_wav(path):
-    with wave.open(path, "rb") as wav:
+    with wave.open(str(path), "rb") as wav:
         if wav.getsampwidth() != 2 or wav.getnchannels() != 1:
             raise ValueError(f"{path} must be mono 16-bit PCM")
 
@@ -438,6 +523,7 @@ def estimate_and_check(reference_wav, target_wav, label):
 
     return shift
 
+
 def export_camera_cuts(path, camera_by_frame, duration):
     """Save contiguous camera selections as an inspectable JSON cut list."""
     if len(camera_by_frame) == 0:
@@ -478,16 +564,27 @@ def export_camera_cuts(path, camera_by_frame, duration):
 
     print(f"Saved {len(cuts)} camera cuts to {path}")
 
+
 def main():
     for path in (VIDEO, VIDEO2, AUDIO1, AUDIO2):
         if not Path(path).exists():
             raise FileNotFoundError(path)
 
-    video_duration = probe_duration(VIDEO)
-    width, height = probe_video_size(VIDEO)
-
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_dir = Path(temp_dir)
+
+        # Check both supplied audio tracks before sync analysis or editing.
+        # If either misses the loudness/peak targets, create a processed WAV.
+        processed_audio1 = prepare_audio(
+            AUDIO1, temp_dir / "audio1_processed.wav"
+        )
+        processed_audio2 = prepare_audio(
+            AUDIO2, temp_dir / "audio2_processed.wav"
+        )
+
+        video_duration = probe_duration(VIDEO)
+        width, height = probe_video_size(VIDEO)
+
         video_wav = str(temp_dir / "video_audio.wav")
         video2_wav = str(temp_dir / "video2_audio.wav")
         audio1_wav = str(temp_dir / "audio1.wav")
@@ -510,8 +607,10 @@ def main():
                 "VIDEO2's embedded audio to sync its picture to VIDEO."
             ) from exc
 
-        extract_analysis_wav(AUDIO1, audio1_wav)
-        extract_analysis_wav(AUDIO2, audio2_wav)
+        # Analyze the prepared tracks so sync and activity use the same audio
+        # that will be included in the final render.
+        extract_analysis_wav(processed_audio1, audio1_wav)
+        extract_analysis_wav(processed_audio2, audio2_wav)
 
         # Estimate each source independently against VIDEO's embedded audio.
         video2_shift = estimate_and_check(
@@ -526,6 +625,7 @@ def main():
         )
         export_camera_cuts(CUTS_JSON, camera_by_frame, video_duration)
 
+        # Inputs 1 and 2 are the prepared audio tracks.
         audio1_filter = aligned_audio_filter(1, shift1, video_duration)
         audio2_filter = aligned_audio_filter(2, shift2, video_duration)
 
@@ -553,8 +653,8 @@ def main():
         run([
             "ffmpeg", "-y",
             "-i", VIDEO,
-            "-i", AUDIO1,
-            "-i", AUDIO2,
+            "-i", processed_audio1,
+            "-i", processed_audio2,
             "-i", VIDEO2,
             "-filter_complex", filter_complex,
             "-map", "[vout]",
