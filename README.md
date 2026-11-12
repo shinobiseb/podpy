@@ -1,32 +1,25 @@
 # PodPy
 
-A small Unix-type Python prototype for creating an audio-driven multicam edit from two synced video sources and two audio sources.
+A small local Python prototype for creating an audio-driven multicam edit from two video sources and two separate audio tracks.
 
-The script analyzes the audio tracks, estimates sync offsets, decides which camera should be active based on microphone activity, exports a JSON cut list, and renders a final video with FFmpeg.
-
-## What it does
-
-- Reads two video files and two audio files
-- Checks that the media files exist and are readable
-- Uses FFprobe to inspect media metadata
-- Aligns audio/video streams by estimating audio offsets
-- Detects activity in each source
-- Chooses the active camera based on which mic is speaking
-- Saves a cut list to JSON for review
-- Renders a switched video output with FFmpeg
+The app checks audio loudness, optionally applies voice processing, estimates sync offsets, chooses the active camera based on microphone activity, exports a JSON cut list, and renders the final video with FFmpeg.
 
 ## Project structure
 
-- `src/main.py` — main processing script
+- `src/main.py` — workflow orchestration and entry point
+- `src/config.py` — input/output paths and processing settings
+- `src/media.py` — FFmpeg/ffprobe helpers and WAV analysis I/O
+- `src/audio.py` — loudness measurement, voice processing, audio alignment filters
+- `src/sync.py` — audio-envelope sync estimation
+- `src/camera.py` — activity detection, camera selection, cut-list export
+- `src/rendering.py` — video filters, camera cuts, final FFmpeg render
 - `requirements.txt` — Python dependencies
-- `test_synced_merged_cuts.json` — sample output of detected cuts
-- `PROJECT_NOTES.md` — project notes and design ideas
 
 ## Requirements
 
 - Python 3.9+
 - FFmpeg and ffprobe installed and available in your PATH
-- A virtual environment is recommended
+- Dependencies installed in a virtual environment
 
 ## Setup
 
@@ -36,9 +29,9 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## Usage
+## Configure and run
 
-Edit the media file paths in `src/main.py` if needed:
+Edit the media paths and settings in `src/config.py`:
 
 ```python
 VIDEO = "src/files/pov_seb.mp4"
@@ -48,26 +41,14 @@ AUDIO2 = "src/files/pod1_gus.mp3"
 OUTPUT = "Synced_video.mp4"
 ```
 
-Then run:
+Run the workflow from the repository root:
 
 ```bash
 python src/main.py
 ```
 
-This will:
+For each audio track, the script measures integrated loudness (LUFS) and true peak (dBTP). It uses the original if it is within the configured LUFS tolerance and below the true-peak ceiling; otherwise it makes a processed temporary WAV. The processed/original prepared tracks are used consistently for sync analysis, activity detection, and the final render. Temporary audio is removed when the run finishes.
 
-- analyze the audio,
-- generate a cut timeline,
-- save `test_synced_merged_cuts.json`, and
-- write the final render to `Synced_video.mp4`.
+The processing chain (gate, high-pass/EQ, compressor, and loudness normalization) is a starting point, not a universal preset. Tune the parameters in `src/config.py` for the speaker, microphone, and room. Loudness measurement cannot determine whether a gate/EQ/compressor was previously applied; it only checks measured loudness and peak.
 
-## Notes
-
-This repo is a prototype focused on the core workflow: detect activity, choose the active shot, and render the result. It is intentionally simple and local-first.
-
-## Dependencies
-
-```txt
-numpy>=1.23
-webrtcvad-wheels>=2.0.14
-```
+The script writes the final video to `OUTPUT` and a reviewable camera cut list to `CUTS_JSON`.
