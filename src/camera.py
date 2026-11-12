@@ -1,5 +1,7 @@
 import json
 import math
+import xml.etree.ElementTree as ET
+from pathlib import Path
 
 import numpy as np
 
@@ -25,6 +27,25 @@ def _filter_short_runs(mask, value, max_length, replacement):
         if end - start <= max_length:
             result[start:end] = replacement
     return result
+
+
+def _cut_segments(camera_by_frame, duration):
+    boundaries = np.flatnonzero(camera_by_frame[1:] != camera_by_frame[:-1]) + 1
+    starts = np.r_[0, boundaries]
+    ends = np.r_[boundaries, len(camera_by_frame)]
+
+    segments = []
+    for start_frame, end_frame in zip(starts, ends):
+        start = start_frame / ENVELOPE_RATE
+        end = min(end_frame / ENVELOPE_RATE, duration)
+        camera_number = int(camera_by_frame[start_frame])
+        segments.append({
+            "start_seconds": start,
+            "end_seconds": end,
+            "duration_seconds": end - start,
+            "camera_number": camera_number,
+        })
+    return segments
 
 
 def audio_activity_on_timeline(path, shift, duration):
@@ -90,14 +111,11 @@ def export_camera_cuts(path, camera_by_frame, duration, video1=VIDEO, video2=VID
     if len(camera_by_frame) == 0:
         raise ValueError("No camera-selection frames were generated")
 
-    boundaries = np.flatnonzero(camera_by_frame[1:] != camera_by_frame[:-1]) + 1
-    starts = np.r_[0, boundaries]
-    ends = np.r_[boundaries, len(camera_by_frame)]
     cuts = []
-    for start_frame, end_frame in zip(starts, ends):
-        start = start_frame / ENVELOPE_RATE
-        end = min(end_frame / ENVELOPE_RATE, duration)
-        camera_number = int(camera_by_frame[start_frame])
+    for segment in _cut_segments(camera_by_frame, duration):
+        start = segment["start_seconds"]
+        end = segment["end_seconds"]
+        camera_number = segment["camera_number"]
         cuts.append({
             "start_seconds": round(start, 3),
             "end_seconds": round(end, 3),
@@ -115,3 +133,40 @@ def export_camera_cuts(path, camera_by_frame, duration, video1=VIDEO, video2=VID
         json.dump(data, json_file, indent=2)
         json_file.write("\n")
     print(f"Saved {len(cuts)} camera cuts to {path}")
+
+
+def export_fcpxml(path, camera_by_frame, duration, video1=VIDEO, video2=VIDEO2):
+    """Export a simplified Final Cut Pro XML cut list for a compatible editor imports."""
+    if len(camera_by_frame) == 0:
+        raise ValueError("No camera-selection frames were generated")
+
+    fcpxml = ET.Element("fcpxml", version="1.8")
+    resources = ET.SubElement(fcpxml, "resources")
+    ET.SubElement(resources, "asset", id="video1", name=Path(video1).name, src=str(Path(video1).resolve()))
+    ET.SubElement(resources, "asset", id="video2", name=Path(video2).name, src=str(Path(video2).resolve()))
+
+    library = ET.SubElement(fcpxml, "library")
+    event = ET.SubElement(library, "event", name="PodPy")
+    project = ET.SubElement(event, "project", name="Auto Cut")
+    sequence = ET.SubElement(project, "sequence", duration=f"{duration:.6f}s")
+    spine = ET.SubElement(sequence, "spine")
+
+    for index, segment in enumerate(_cut_segments(camera_by_frame, duration)):
+        camera_number = segment["camera_number"]
+        start = segment["start_seconds"]
+        clip_duration = segment["duration_seconds"]
+        clip_id = f"clip{index + 1}"
+        ref_id = "video1" if camera_number == 1 else "video2"
+        clip = ET.SubElement(
+            spine,
+            "clip",
+            id=clip_id,
+            name=f"VIDEO{camera_number} segment {index + 1}",
+            start=f"{start:.6f}s",
+            duration=f"{clip_duration:.6f}s",
+        )
+        ET.SubElement(clip, "video", ref=ref_id, offset="0s", duration=f"{clip_duration:.6f}s")
+
+    ET.indent(fcpxml, space="  ")
+    ET.ElementTree(fcpxml).write(path, encoding="utf-8", xml_declaration=True)
+    print(f"Saved Final Cut Pro XML timeline to {path}")

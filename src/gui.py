@@ -11,7 +11,7 @@ class PodPyApp:
     def __init__(self, root):
         self.root = root
         root.title("PodPy — Podcast Video Editor")
-        root.minsize(680, 480)
+        root.minsize(680, 520)
 
         self.fields = {}
         self._build_form()
@@ -34,6 +34,7 @@ class PodPyApp:
             ("Audio track 2", "audio2", AUDIO2, "file"),
             ("Output video", "output", OUTPUT, "save_video"),
             ("Cut-list JSON", "cuts", CUTS_JSON, "save_json"),
+            ("Final Cut XML", "final_cut_xml", "podpy_fcpxml.xml", "save_xml"),
         ]
 
         for row, (label, key, initial, picker) in enumerate(rows, start=1):
@@ -54,19 +55,19 @@ class PodPyApp:
         self.process_button = ttk.Button(
             container, text="Process video", command=self._start_processing
         )
-        self.process_button.grid(row=7, column=0, columnspan=3, sticky="ew", pady=(16, 10))
+        self.process_button.grid(row=8, column=0, columnspan=3, sticky="ew", pady=(16, 10))
 
         ttk.Label(container, text="Progress").grid(
-            row=8, column=0, columnspan=3, sticky="w", pady=(4, 4)
+            row=9, column=0, columnspan=3, sticky="w", pady=(4, 4)
         )
         self.status = tk.StringVar(value="Ready")
         ttk.Label(container, textvariable=self.status).grid(
-            row=9, column=0, columnspan=3, sticky="w", pady=(0, 8)
+            row=10, column=0, columnspan=3, sticky="w", pady=(0, 8)
         )
 
         self.log = tk.Text(container, height=8, wrap="word", state="disabled")
-        self.log.grid(row=10, column=0, columnspan=3, sticky="nsew")
-        container.rowconfigure(10, weight=1)
+        self.log.grid(row=11, column=0, columnspan=3, sticky="nsew")
+        container.rowconfigure(11, weight=1)
 
     def _browse(self, field, kind):
         current = self.fields[field].get()
@@ -89,13 +90,21 @@ class PodPyApp:
                 defaultextension=".mp4",
                 filetypes=[("MP4 video", "*.mp4")],
             )
-        else:
+        elif kind == "save_json":
             selected = filedialog.asksaveasfilename(
                 title="Save camera cut list as",
                 initialdir=initial_dir,
                 initialfile=Path(current).name if current else "camera_cuts.json",
                 defaultextension=".json",
                 filetypes=[("JSON files", "*.json")],
+            )
+        else:
+            selected = filedialog.asksaveasfilename(
+                title="Save Final Cut XML as",
+                initialdir=initial_dir,
+                initialfile=Path(current).name if current else "podpy_fcpxml.xml",
+                defaultextension=".xml",
+                filetypes=[("XML files", "*.xml")],
             )
 
         if selected:
@@ -134,6 +143,7 @@ class PodPyApp:
                     audio2=values["audio2"],
                     output=values["output"],
                     cuts_json=values["cuts"],
+                    final_cut_xml=values.get("final_cut_xml") or None,
                     on_progress=report,
                 )
             except Exception as exc:

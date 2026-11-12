@@ -3,15 +3,24 @@ import tempfile
 from pathlib import Path
 
 from audio import prepare_audio
-from camera import choose_camera_by_activity, export_camera_cuts
+from camera import choose_camera_by_activity, export_camera_cuts, export_fcpxml
 from config import ENVELOPE_RATE, MIN_CORRELATION
 from media import extract_analysis_wav, probe_duration, probe_video_size
 from rendering import render_video
 from sync import estimate_and_check
 
 
-def process_project(video1, video2, audio1, audio2, output, cuts_json, on_progress=None):
-    """Run the complete sync, camera-selection, and render workflow."""
+def process_project(
+    video1,
+    video2,
+    audio1,
+    audio2,
+    output,
+    cuts_json,
+    final_cut_xml=None,
+    on_progress=None,
+):
+    """Run the sync, camera-select, render, and optional Final Cut Pro XML export workflow."""
     def report(message):
         print(message)
         if on_progress:
@@ -70,9 +79,9 @@ def process_project(video1, video2, audio1, audio2, output, cuts_json, on_progre
         camera_by_frame = choose_camera_by_activity(
             audio1_wav, audio2_wav, audio1_shift, audio2_shift, duration
         )
-        export_camera_cuts(
-            cuts_json, camera_by_frame, duration, video1, video2
-        )
+        export_camera_cuts(cuts_json, camera_by_frame, duration, video1, video2)
+        if final_cut_xml:
+            export_fcpxml(final_cut_xml, camera_by_frame, duration, video1, video2)
 
         report("Rendering final video. This may take a while...")
         render_video(
@@ -93,3 +102,5 @@ def process_project(video1, video2, audio1, audio2, output, cuts_json, on_progre
 
     report(f"Finished: {output}")
     report(f"Camera cut list: {cuts_json}")
+    if final_cut_xml:
+        report(f"Final Cut Pro XML: {final_cut_xml}")
