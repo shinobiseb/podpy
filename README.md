@@ -1,103 +1,41 @@
-import subprocess
-import tempfile
-from pathlib import Path
+# PodPy
 
-from audio import prepare_audio
-from camera import choose_camera_by_activity, export_camera_cuts
-from config import (
-    AUDIO1,
-    AUDIO2,
-    CUTS_JSON,
-    ENVELOPE_RATE,
-    MIN_CORRELATION,
-    OUTPUT,
-    VIDEO,
-    VIDEO2,
-)
-from media import extract_analysis_wav, probe_duration, probe_video_size
-from rendering import render_video
-from sync import estimate_and_check
+A local desktop-friendly tool that creates an audio-driven multicamera podcast edit from two videos and two separate audio tracks.
 
+## Desktop app
 
-def validate_inputs():
-    for path in (VIDEO, VIDEO2, AUDIO1, AUDIO2):
-        if not Path(path).exists():
-            raise FileNotFoundError(path)
+The simple Tkinter interface lets you browse for both video files, both audio tracks, and choose where the rendered MP4 and camera cut-list JSON should be saved. Processing runs locally on your computer.
 
+```bash
+python src/gui.py
+```
 
-def main():
-    validate_inputs()
+Select the four inputs and output destinations, then click **Process video**. The app checks/normalizes the audio as needed, estimates sync, chooses camera cuts from mic activity, and renders the output. Keep the app open until rendering finishes.
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        temp_dir = Path(temp_dir)
-        processed_audio1 = prepare_audio(
-            AUDIO1, temp_dir / "audio1_processed.wav"
-        )
-        processed_audio2 = prepare_audio(
-            AUDIO2, temp_dir / "audio2_processed.wav"
-        )
+## Requirements
 
-        video_duration = probe_duration(VIDEO)
-        width, height = probe_video_size(VIDEO)
+- Python 3.9+
+- FFmpeg and ffprobe installed and available on your PATH
+- Dependencies installed in a virtual environment
 
-        video_wav = temp_dir / "video_audio.wav"
-        video2_wav = temp_dir / "video2_audio.wav"
-        audio1_wav = temp_dir / "audio1.wav"
-        audio2_wav = temp_dir / "audio2.wav"
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
 
-        print("Extracting analysis audio...")
-        try:
-            extract_analysis_wav(VIDEO, video_wav)
-        except subprocess.CalledProcessError as exc:
-            raise SystemExit(
-                "Could not extract audio from VIDEO. This workflow needs "
-                "VIDEO's embedded audio as its sync reference."
-            ) from exc
+Tkinter is included with many Python installations. On some Linux distributions it must be installed separately (for example, the `python3-tk` system package).
 
-        try:
-            extract_analysis_wav(VIDEO2, video2_wav)
-        except subprocess.CalledProcessError as exc:
-            raise SystemExit(
-                "Could not extract audio from VIDEO2. This workflow uses "
-                "VIDEO2's embedded audio to sync its picture to VIDEO."
-            ) from exc
+## Command-line mode
 
-        extract_analysis_wav(processed_audio1, audio1_wav)
-        extract_analysis_wav(processed_audio2, audio2_wav)
+To run with the default file paths configured in `src/config.py`:
 
-        video2_shift = estimate_and_check(
-            video_wav, video2_wav, "VIDEO2", MIN_CORRELATION
-        )
-        shift1 = estimate_and_check(
-            video_wav, audio1_wav, "AUDIO1", MIN_CORRELATION
-        )
-        shift2 = estimate_and_check(
-            video_wav, audio2_wav, "AUDIO2", MIN_CORRELATION
-        )
+```bash
+python src/main.py
+```
 
-        camera_by_frame = choose_camera_by_activity(
-            audio1_wav, audio2_wav, shift1, shift2, video_duration
-        )
-        export_camera_cuts(CUTS_JSON, camera_by_frame, video_duration)
+## Processing notes
 
-        render_video(
-            VIDEO,
-            processed_audio1,
-            processed_audio2,
-            VIDEO2,
-            OUTPUT,
-            video_duration,
-            width,
-            height,
-            shift1,
-            shift2,
-            video2_shift,
-            camera_by_frame,
-            ENVELOPE_RATE,
-        )
+The app checks integrated loudness and true peak. Tracks outside the configured target are processed with a gate, high-pass/EQ, compressor, and loudness normalization. These are starting values; adjust them in `src/config.py` for your microphones and room. Loudness checking does not prove that the filters were previously applied.
 
-    print(f"Done: {OUTPUT}")
-
-
-if __name__ == "__main__":
-    main()
+The video and cut list are written to the destinations selected in the app. Temporary analysis and processed audio files are cleaned up automatically.
