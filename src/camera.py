@@ -151,7 +151,7 @@ def export_fcpxml(
     audio1_shift=0.0,
     audio2_shift=0.0,
 ):
-    """Write FCPXML with processed audio and no camera-source audio."""
+    """Write a Resolve-friendly FCPXML timeline using separate video and audio tracks."""
     if len(camera_by_frame) == 0:
         raise ValueError("No camera-selection frames were generated")
     if not audio1 or not audio2:
@@ -217,6 +217,8 @@ def export_fcpxml(
         audioRate="48k",
     )
     spine = ET.SubElement(sequence, "spine")
+    video_track = ET.SubElement(spine, "video")
+    audio_track = ET.SubElement(spine, "audio")
 
     timeline_cursor = 0
     for segment_number, segment in enumerate(_cut_segments(camera_by_frame, duration), start=1):
@@ -224,71 +226,105 @@ def export_fcpxml(
         segment_end = min(project_frames, round(segment["end_seconds"] * OUTPUT_FPS))
         if segment_end <= segment_start:
             continue
+
         camera = segment["camera_number"]
-        _video_source, video_duration, video_shift, video_ref = sources[camera]
-        video_shift_frames = round(video_shift * OUTPUT_FPS)
-        video_end_frame = round(video_duration * OUTPUT_FPS)
-        valid_start = max(segment_start, -video_shift_frames)
-        valid_end = min(segment_end, video_end_frame - video_shift_frames)
+        source, source_duration, source_shift, video_ref = sources[camera]
+        source_shift_frames = round(source_shift * OUTPUT_FPS)
+        source_end_frame = round(source_duration * OUTPUT_FPS)
+        valid_start = max(segment_start, -source_shift_frames)
+        valid_end = min(segment_end, source_end_frame - source_shift_frames)
 
         if valid_start > timeline_cursor:
             gap_end = min(valid_start, segment_end)
             ET.SubElement(
-                spine, "gap", name="Unavailable source frames",
+                video_track, "gap",
+                name="Unavailable source frames",
+                offset=_frame_time(timeline_cursor),
+                duration=_frame_time(gap_end - timeline_cursor),
+            )
+            ET.SubElement(
+                audio_track, "gap",
+                name="Unavailable source frames",
                 offset=_frame_time(timeline_cursor),
                 duration=_frame_time(gap_end - timeline_cursor),
             )
             timeline_cursor = gap_end
+
         if valid_end <= valid_start:
             if timeline_cursor < segment_end:
                 ET.SubElement(
-                    spine, "gap", name="Unavailable source frames",
+                    video_track, "gap",
+                    name="Unavailable source frames",
+                    offset=_frame_time(timeline_cursor),
+                    duration=_frame_time(segment_end - timeline_cursor),
+                )
+                ET.SubElement(
+                    audio_track, "gap",
+                    name="Unavailable source frames",
                     offset=_frame_time(timeline_cursor),
                     duration=_frame_time(segment_end - timeline_cursor),
                 )
                 timeline_cursor = segment_end
             continue
+
         if valid_start > timeline_cursor:
             ET.SubElement(
-                spine, "gap", name="Timeline gap",
+                video_track, "gap",
+                name="Timeline gap",
+                offset=_frame_time(timeline_cursor),
+                duration=_frame_time(valid_start - timeline_cursor),
+            )
+            ET.SubElement(
+                audio_track, "gap",
+                name="Timeline gap",
                 offset=_frame_time(timeline_cursor),
                 duration=_frame_time(valid_start - timeline_cursor),
             )
             timeline_cursor = valid_start
 
         clip_frames = valid_end - valid_start
-        source_start = valid_start + video_shift_frames
+        source_in = valid_start + source_shift_frames
         video_clip = ET.SubElement(
-            spine,
+            video_track,
             "asset-clip",
             name=f"VIDEO{camera} segment {segment_number}",
             ref=video_ref,
             offset=_frame_time(timeline_cursor),
-            start=_frame_time(source_start),
+            start=_frame_time(source_in),
             duration=_frame_time(clip_frames),
         )
-        for audio_number, (_audio_path, audio_len, audio_shift, audio_ref) in audio_sources.items():
+        _ = video_clip
+
+        for audio_number, (_audio_path, audio_duration, audio_shift, audio_ref) in audio_sources.items():
             audio_shift_frames = round(audio_shift * OUTPUT_FPS)
-            audio_end_frame = round(audio_len * OUTPUT_FPS)
-            aud_start = max(valid_start, -audio_shift_frames)
-            aud_end = min(valid_end, audio_end_frame - audio_shift_frames)
-            if aud_end <= aud_start:
+            audio_end_frame = round(audio_duration * OUTPUT_FPS)
+            audio_valid_start = max(valid_start, -audio_shift_frames)
+            audio_valid_end = min(valid_end, audio_end_frame - audio_shift_frames)
+            if audio_valid_end <= audio_valid_start:
                 continue
+            audio_segment_frames = audio_valid_end - audio_valid_start
+            audio_in = audio_valid_start + audio_shift_frames
             ET.SubElement(
-                video_clip,
+                audio_track,
                 "asset-clip",
                 name=f"Processed audio {audio_number} segment {segment_number}",
                 ref=audio_ref,
-                lane=str(audio_number),
-                offset=_frame_time(aud_start - valid_start),
-                start=_frame_time(aud_start + audio_shift_frames),
-                duration=_frame_time(aud_end - aud_start),
-                audioRole="dialogue",
+                offset=_frame_time(timeline_cursor),
+                start=_frame_time(audio_in),
+                duration=_frame_time(audio_segment_frames),
             )
+
         timeline_cursor += clip_frames
         if timeline_cursor < segment_end:
             ET.SubElement(
-                spine, "gap", name="Unavailable source frames",
+                video_track, "gap",
+                name="Unavailable source frames",
+                offset=_frame_time(timeline_cursor),
+                duration=_frame_time(segment_end - timeline_cursor),
+            )
+            ET.SubElement(
+                audio_track, "gap",
+                name="Unavailable source frames",
                 offset=_frame_time(timeline_cursor),
                 duration=_frame_time(segment_end - timeline_cursor),
             )
@@ -296,7 +332,14 @@ def export_fcpxml(
 
     if timeline_cursor < project_frames:
         ET.SubElement(
-            spine, "gap", name="End of timeline",
+            video_track, "gap",
+            name="End of timeline",
+            offset=_frame_time(timeline_cursor),
+            duration=_frame_time(project_frames - timeline_cursor),
+        )
+        ET.SubElement(
+            audio_track, "gap",
+            name="End of timeline",
             offset=_frame_time(timeline_cursor),
             duration=_frame_time(project_frames - timeline_cursor),
         )
