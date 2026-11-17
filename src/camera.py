@@ -151,12 +151,7 @@ def export_fcpxml(
     audio1_shift=0.0,
     audio2_shift=0.0,
 ):
-    """Write an FCPXML edit with processed audio connected to every video cut.
-
-    Original camera sound is disabled on each video clip. The two processed
-    dialogue tracks are added as connected audio clips and are synced against
-    the VIDEO1 timeline with the measured offsets.
-    """
+    """Write FCPXML with processed audio and no camera-source audio."""
     if len(camera_by_frame) == 0:
         raise ValueError("No camera-selection frames were generated")
     if not audio1 or not audio2:
@@ -192,7 +187,7 @@ def export_fcpxml(
             start="0s",
             duration=_frame_time(round(source_duration * OUTPUT_FPS)),
             hasVideo="1",
-            hasAudio="1",
+            hasAudio="0",
             format="r1",
         )
     for source, source_duration, _shift, asset_id in audio_sources.values():
@@ -230,7 +225,7 @@ def export_fcpxml(
         if segment_end <= segment_start:
             continue
         camera = segment["camera_number"]
-        video_source, video_duration, video_shift, video_ref = sources[camera]
+        _video_source, video_duration, video_shift, video_ref = sources[camera]
         video_shift_frames = round(video_shift * OUTPUT_FPS)
         video_end_frame = round(video_duration * OUTPUT_FPS)
         valid_start = max(segment_start, -video_shift_frames)
@@ -271,11 +266,8 @@ def export_fcpxml(
             offset=_frame_time(timeline_cursor),
             start=_frame_time(source_start),
             duration=_frame_time(clip_frames),
-            audioSources="0",
         )
-        # Attach both processed audio tracks to this video edit. Each source
-        # in-point is derived from timeline time plus its measured sync shift.
-        for audio_number, (audio_path, audio_len, audio_shift, audio_ref) in audio_sources.items():
+        for audio_number, (_audio_path, audio_len, audio_shift, audio_ref) in audio_sources.items():
             audio_shift_frames = round(audio_shift * OUTPUT_FPS)
             audio_end_frame = round(audio_len * OUTPUT_FPS)
             aud_start = max(valid_start, -audio_shift_frames)

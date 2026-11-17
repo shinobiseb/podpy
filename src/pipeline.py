@@ -1,5 +1,6 @@
 import subprocess
 import tempfile
+import shutil
 from pathlib import Path
 
 from audio import prepare_audio
@@ -24,11 +25,10 @@ def process_project(
     output_mode="render",
     on_progress=None,
 ):
-    """Analyze two cameras, then render an MP4, export a Resolve timeline XML, or both.
+    """Analyze two cameras, render an MP4, export Resolve FCPXML, or both.
 
-    Omitting both audio paths selects embedded-audio mode. Resolve-only mode
-    skips audio mastering and video rendering; it writes a timeline XML that
-    references the original video files and their cut segments.
+    Resolve exports include persistent processed audio assets alongside the
+    FCPXML. Camera-source audio is excluded from that timeline.
     """
     def report(message):
         print(message)
@@ -80,24 +80,47 @@ def process_project(
             activity_audio1 = temp_dir / "audio1_analysis.wav"
             activity_audio2 = temp_dir / "audio2_analysis.wav"
 
-        if render_requested:
-            if video_only_mode:
-                report("Extracting full embedded audio for the MP4...")
-                embedded_audio1 = temp_dir / "video1_embedded_audio.wav"
-                embedded_audio2 = temp_dir / "video2_embedded_audio.wav"
-                try:
-                    extract_audio_track(video1, embedded_audio1)
-                    extract_audio_track(video2, embedded_audio2)
-                except subprocess.CalledProcessError as exc:
-                    raise RuntimeError(
-                        "Could not extract embedded audio. Both videos must contain an audio track."
-                    ) from exc
-                prepared_audio1 = prepare_audio(embedded_audio1, temp_dir / "video1_processed.wav")
-                prepared_audio2 = prepare_audio(embedded_audio2, temp_dir / "video2_processed.wav")
-            else:
-                report("Preparing external audio tracks for the MP4...")
-                prepared_audio1 = prepare_audio(audio1, temp_dir / "audio1_processed.wav")
-                prepared_audio2 = prepare_audio(audio2, temp_dir / "audio2_processed.wav")
+        # Resolve needs audio files that remain available after this temporary
+        # workspace is deleted. Store these beside the XML in a companion folder.
+        if timeline_requested:
+            xml_path = Path(resolve_xml).expanduser().resolve()
+            audio_assets_dir = xml_path.parent / f"{xml_path.stem}_media"
+            audio_assets_dir.mkdir(parents=True, exist_ok=True)
+            processed1_path = audio_assets_dir / "processed_audio1.wav"
+            processed2_path = audio_assets_dir / "processed_audio2.wav"
+        else:
+            processed1_path = temp_dir / "audio1_processed.wav"
+            processed2_path = temp_dir / "audio2_processed.wav"
+
+        if video_only_mode:
+            report("Preparing embedded audio for output...")
+            embedded_audio1 = temp_dir / "video1_embedded_audio.wav"
+            embedded_audio2 = temp_dir / "video2_embedded_audio.wav"
+            try:
+                extract_audio_track(video1, embedded_audio1)
+                extract_audio_track(video2, embedded_audio2)
+            except subprocess.CalledProcessError as exc:
+                raise RuntimeError(
+                    "Could not extract embedded audio. Both videos must contain an audio track."
+                ) from exc
+            audio_source1, audio_source2 = embedded_audio1, embedded_audio2
+        else:
+            report("Preparing external audio tracks for output...")
+            audio_source1, audio_source2 = audio1, audio2
+
+        prepared_audio1 = Path(prepare_audio(audio_source1, processed1_path)).resolve()
+        prepared_audio2 = Path(prepare_audio(audio_source2, processed2_path)).resolve()
+        if timeline_requested:
+            # prepare_audio may return its input unchanged when it already meets
+            # targets. Copy it out of the temporary directory and use a stable
+            # companion asset path in the XML either way.
+            if prepared_audio1 != processed1_path.resolve():
+                shutil.copy2(prepared_audio1, processed1_path)
+            if prepared_audio2 != processed2_path.resolve():
+                shutil.copy2(prepared_audio2, processed2_path)
+            prepared_audio1 = processed1_path.resolve()
+            prepared_audio2 = processed2_path.resolve()
+            report(f"Resolve audio assets: {audio_assets_dir}")
 
         report("Inspecting videos...")
         duration1 = probe_duration(video1)
@@ -113,12 +136,8 @@ def process_project(
         report("Extracting audio for sync analysis...")
         try:
             if not video_only_mode:
-                extract_analysis_wav(
-                    prepared_audio1 if render_requested else audio1, activity_audio1
-                )
-                extract_analysis_wav(
-                    prepared_audio2 if render_requested else audio2, activity_audio2
-                )
+                extract_analysis_wav(prepared_audio1, activity_audio1)
+                extract_analysis_wav(prepared_audio2, activity_audio2)
             extract_analysis_wav(video1, video1_wav)
             extract_analysis_wav(video2, video2_wav)
         except subprocess.CalledProcessError as exc:
@@ -131,8 +150,12 @@ def process_project(
         if video_only_mode:
             audio2_shift = video2_shift
         else:
-            audio1_shift = estimate_and_check(video1_wav, activity_audio1, "AUDIO1", MIN_CORRELATION)
-            audio2_shift = estimate_and_check(video1_wav, activity_audio2, "AUDIO2", MIN_CORRELATION)
+            audio1_shift = estimate_and_check(
+                video1_wav, activity_audio1, "AUDIO1", MIN_CORRELATION
+            )
+            audio2_shift = estimate_and_check(
+                video1_wav, activity_audio2, "AUDIO2", MIN_CORRELATION
+            )
 
         report("Selecting camera cuts...")
         camera_by_frame = choose_camera_by_activity(
@@ -142,7 +165,7 @@ def process_project(
         export_camera_cuts(cuts_json, camera_by_frame, duration, video1, video2)
 
         if timeline_requested:
-            report("Creating Resolve timeline XML...")
+            report("Creating Resolve timeline XML with processed audio...")
             export_fcpxml(
                 resolve_xml,
                 camera_by_frame,
@@ -154,6 +177,12 @@ def process_project(
                 video2_shift=video2_shift,
                 width=width,
                 height=height,
+                audio1=prepared_audio1,
+                audio2=prepared_audio2,
+                audio1_duration=probe_duration(prepared_audio1),
+                audio2_duration=probe_duration(prepared_audio2),
+                audio1_shift=audio1_shift,
+                audio2_shift=audio2_shift,
             )
             report(f"Resolve XML: {resolve_xml}")
 
