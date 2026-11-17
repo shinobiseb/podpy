@@ -43,6 +43,11 @@ def process_project(
         raise ValueError("An MP4 output path is required for render/both mode.")
     if timeline_requested and not resolve_xml:
         raise ValueError("A Resolve XML path is required for resolve/both mode.")
+    if timeline_requested:
+        resolve_xml = str(resolve_xml)
+        if resolve_xml.lower().endswith(".fcpxml.xml"):
+            resolve_xml = resolve_xml[:-4]
+            report(f"Removing duplicate XML suffix; saving as: {resolve_xml}")
 
     for path in (video1, video2):
         if not Path(path).is_file():
