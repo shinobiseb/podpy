@@ -144,14 +144,31 @@ def export_fcpxml(
     video2_shift=0.0,
     width=1920,
     height=1080,
+    audio1=None,
+    audio2=None,
+    audio1_duration=None,
+    audio2_duration=None,
+    audio1_shift=0.0,
+    audio2_shift=0.0,
 ):
-    """Write a Resolve-importable FCPXML sequence with valid source references."""
+    """Write an FCPXML edit with processed audio connected to every video cut.
+
+    Original camera sound is disabled on each video clip. The two processed
+    dialogue tracks are added as connected audio clips and are synced against
+    the VIDEO1 timeline with the measured offsets.
+    """
     if len(camera_by_frame) == 0:
         raise ValueError("No camera-selection frames were generated")
+    if not audio1 or not audio2:
+        raise ValueError("Both processed audio paths are required for FCPXML export")
 
     sources = {
         1: (Path(video1).expanduser().resolve(), float(video1_duration or duration), 0.0, "r2"),
         2: (Path(video2).expanduser().resolve(), float(video2_duration or duration), float(video2_shift), "r3"),
+    }
+    audio_sources = {
+        1: (Path(audio1).expanduser().resolve(), float(audio1_duration or duration), float(audio1_shift), "r4"),
+        2: (Path(audio2).expanduser().resolve(), float(audio2_duration or duration), float(audio2_shift), "r5"),
     }
     project_frames = max(1, round(duration * OUTPUT_FPS))
     fcpxml = ET.Element("fcpxml", version="1.8")
@@ -178,6 +195,18 @@ def export_fcpxml(
             hasAudio="1",
             format="r1",
         )
+    for source, source_duration, _shift, asset_id in audio_sources.values():
+        ET.SubElement(
+            resources,
+            "asset",
+            id=asset_id,
+            name=source.name,
+            src=source.as_uri(),
+            start="0s",
+            duration=_frame_time(round(source_duration * OUTPUT_FPS)),
+            hasVideo="0",
+            hasAudio="1",
+        )
 
     library = ET.SubElement(fcpxml, "library")
     event = ET.SubElement(library, "event", name="PodPy")
@@ -201,48 +230,73 @@ def export_fcpxml(
         if segment_end <= segment_start:
             continue
         camera = segment["camera_number"]
-        source, source_duration, shift, asset_id = sources[camera]
-        shift_frames = round(shift * OUTPUT_FPS)
-        source_end = round(source_duration * OUTPUT_FPS)
-        valid_start = max(segment_start, -shift_frames)
-        valid_end = min(segment_end, source_end - shift_frames)
+        video_source, video_duration, video_shift, video_ref = sources[camera]
+        video_shift_frames = round(video_shift * OUTPUT_FPS)
+        video_end_frame = round(video_duration * OUTPUT_FPS)
+        valid_start = max(segment_start, -video_shift_frames)
+        valid_end = min(segment_end, video_end_frame - video_shift_frames)
 
         if valid_start > timeline_cursor:
+            gap_end = min(valid_start, segment_end)
             ET.SubElement(
-                spine,
-                "gap",
-                name="Unavailable source frames",
+                spine, "gap", name="Unavailable source frames",
+                offset=_frame_time(timeline_cursor),
+                duration=_frame_time(gap_end - timeline_cursor),
+            )
+            timeline_cursor = gap_end
+        if valid_end <= valid_start:
+            if timeline_cursor < segment_end:
+                ET.SubElement(
+                    spine, "gap", name="Unavailable source frames",
+                    offset=_frame_time(timeline_cursor),
+                    duration=_frame_time(segment_end - timeline_cursor),
+                )
+                timeline_cursor = segment_end
+            continue
+        if valid_start > timeline_cursor:
+            ET.SubElement(
+                spine, "gap", name="Timeline gap",
                 offset=_frame_time(timeline_cursor),
                 duration=_frame_time(valid_start - timeline_cursor),
             )
             timeline_cursor = valid_start
-        if valid_end > valid_start:
-            if valid_start > timeline_cursor:
-                ET.SubElement(
-                    spine,
-                    "gap",
-                    name="Timeline gap",
-                    offset=_frame_time(timeline_cursor),
-                    duration=_frame_time(valid_start - timeline_cursor),
-                )
-                timeline_cursor = valid_start
-            clip_frames = valid_end - valid_start
-            source_start = valid_start + shift_frames
+
+        clip_frames = valid_end - valid_start
+        source_start = valid_start + video_shift_frames
+        video_clip = ET.SubElement(
+            spine,
+            "asset-clip",
+            name=f"VIDEO{camera} segment {segment_number}",
+            ref=video_ref,
+            offset=_frame_time(timeline_cursor),
+            start=_frame_time(source_start),
+            duration=_frame_time(clip_frames),
+            audioSources="0",
+        )
+        # Attach both processed audio tracks to this video edit. Each source
+        # in-point is derived from timeline time plus its measured sync shift.
+        for audio_number, (audio_path, audio_len, audio_shift, audio_ref) in audio_sources.items():
+            audio_shift_frames = round(audio_shift * OUTPUT_FPS)
+            audio_end_frame = round(audio_len * OUTPUT_FPS)
+            aud_start = max(valid_start, -audio_shift_frames)
+            aud_end = min(valid_end, audio_end_frame - audio_shift_frames)
+            if aud_end <= aud_start:
+                continue
             ET.SubElement(
-                spine,
+                video_clip,
                 "asset-clip",
-                name=f"VIDEO{camera} segment {segment_number}",
-                ref=asset_id,
-                offset=_frame_time(timeline_cursor),
-                start=_frame_time(source_start),
-                duration=_frame_time(clip_frames),
+                name=f"Processed audio {audio_number} segment {segment_number}",
+                ref=audio_ref,
+                lane=str(audio_number),
+                offset=_frame_time(aud_start - valid_start),
+                start=_frame_time(aud_start + audio_shift_frames),
+                duration=_frame_time(aud_end - aud_start),
+                audioRole="dialogue",
             )
-            timeline_cursor += clip_frames
+        timeline_cursor += clip_frames
         if timeline_cursor < segment_end:
             ET.SubElement(
-                spine,
-                "gap",
-                name="Unavailable source frames",
+                spine, "gap", name="Unavailable source frames",
                 offset=_frame_time(timeline_cursor),
                 duration=_frame_time(segment_end - timeline_cursor),
             )
@@ -250,9 +304,7 @@ def export_fcpxml(
 
     if timeline_cursor < project_frames:
         ET.SubElement(
-            spine,
-            "gap",
-            name="End of timeline",
+            spine, "gap", name="End of timeline",
             offset=_frame_time(timeline_cursor),
             duration=_frame_time(project_frames - timeline_cursor),
         )
