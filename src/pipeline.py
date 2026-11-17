@@ -52,15 +52,13 @@ def process_project(
     for path in (video1, video2):
         if not Path(path).is_file():
             raise FileNotFoundError(f"Input video not found: {path}")
-
     if (audio1 is None) != (audio2 is None):
         raise ValueError("Provide either both external audio tracks or neither.")
-
     video_only_mode = audio1 is None
     if not video_only_mode:
         for path in (audio1, audio2):
             if not Path(path).is_file():
-                raise FileNotFoundError(f"Input audio file not found: {path}")
+                raise FileNotFoundError(f"Input audio not found: {path}")
 
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_dir = Path(temp_dir)
@@ -92,14 +90,10 @@ def process_project(
                     extract_audio_track(video2, embedded_audio2)
                 except subprocess.CalledProcessError as exc:
                     raise RuntimeError(
-                        "Could not extract embedded audio. Both videos must contain audio."
+                        "Could not extract embedded audio. Both videos must contain an audio track."
                     ) from exc
-                prepared_audio1 = prepare_audio(
-                    embedded_audio1, temp_dir / "video1_processed.wav"
-                )
-                prepared_audio2 = prepare_audio(
-                    embedded_audio2, temp_dir / "video2_processed.wav"
-                )
+                prepared_audio1 = prepare_audio(embedded_audio1, temp_dir / "video1_processed.wav")
+                prepared_audio2 = prepare_audio(embedded_audio2, temp_dir / "video2_processed.wav")
             else:
                 report("Preparing external audio tracks for the MP4...")
                 prepared_audio1 = prepare_audio(audio1, temp_dir / "audio1_processed.wav")
@@ -133,27 +127,16 @@ def process_project(
             ) from exc
 
         report("Estimating sync offsets...")
-        video2_shift = estimate_and_check(
-            video1_wav, video2_wav, "VIDEO2", MIN_CORRELATION
-        )
-
+        video2_shift = estimate_and_check(video1_wav, video2_wav, "VIDEO2", MIN_CORRELATION)
         if video_only_mode:
             audio2_shift = video2_shift
         else:
-            audio1_shift = estimate_and_check(
-                video1_wav, activity_audio1, "AUDIO1", MIN_CORRELATION
-            )
-            audio2_shift = estimate_and_check(
-                video1_wav, activity_audio2, "AUDIO2", MIN_CORRELATION
-            )
+            audio1_shift = estimate_and_check(video1_wav, activity_audio1, "AUDIO1", MIN_CORRELATION)
+            audio2_shift = estimate_and_check(video1_wav, activity_audio2, "AUDIO2", MIN_CORRELATION)
 
         report("Selecting camera cuts...")
         camera_by_frame = choose_camera_by_activity(
-            activity_audio1,
-            activity_audio2,
-            audio1_shift,
-            audio2_shift,
-            duration,
+            activity_audio1, activity_audio2, audio1_shift, audio2_shift, duration,
             default_camera=default_camera,
         )
         export_camera_cuts(cuts_json, camera_by_frame, duration, video1, video2)
@@ -166,6 +149,11 @@ def process_project(
                 duration,
                 video1,
                 video2,
+                video1_duration=duration1,
+                video2_duration=duration2,
+                video2_shift=video2_shift,
+                width=width,
+                height=height,
             )
             report(f"Resolve XML: {resolve_xml}")
 
