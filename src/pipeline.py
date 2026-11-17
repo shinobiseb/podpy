@@ -3,11 +3,7 @@ import tempfile
 from pathlib import Path
 
 from audio import prepare_audio
-from camera import (
-    choose_camera_by_activity,
-    export_camera_cuts,
-    export_resolve_edl,
-)
+from camera import choose_camera_by_activity, export_camera_cuts, export_fcpxml
 from config import ENVELOPE_RATE, MIN_CORRELATION
 from media import extract_analysis_wav, extract_audio_track, probe_duration, probe_video_size
 from rendering import render_video
@@ -24,15 +20,15 @@ def process_project(
     audio2=None,
     output=None,
     cuts_json="camera_cuts.json",
-    resolve_edl=None,
+    resolve_xml=None,
     output_mode="render",
     on_progress=None,
 ):
-    """Analyze two cameras, then render an MP4, export a Resolve EDL, or both.
+    """Analyze two cameras, then render an MP4, export a Resolve timeline XML, or both.
 
     Omitting both audio paths selects embedded-audio mode. Resolve-only mode
-    skips audio mastering and video rendering; only small temporary analysis
-    WAVs are made, and the EDL refers to the original video files.
+    skips audio mastering and video rendering; it writes a timeline XML that
+    references the original video files and their cut segments.
     """
     def report(message):
         print(message)
@@ -45,8 +41,8 @@ def process_project(
     timeline_requested = output_mode in ("resolve", "both")
     if render_requested and not output:
         raise ValueError("An MP4 output path is required for render/both mode.")
-    if timeline_requested and not resolve_edl:
-        raise ValueError("A Resolve EDL path is required for resolve/both mode.")
+    if timeline_requested and not resolve_xml:
+        raise ValueError("A Resolve XML path is required for resolve/both mode.")
 
     for path in (video1, video2):
         if not Path(path).is_file():
@@ -107,7 +103,6 @@ def process_project(
         report("Inspecting videos...")
         duration1 = probe_duration(video1)
         duration2 = probe_duration(video2)
-        # Camera 1 remains the synchronization/timeline reference.
         duration = duration1
         width, height = probe_video_size(video1)
         default_camera = 2 if duration2 > duration1 else 1
@@ -159,19 +154,15 @@ def process_project(
         export_camera_cuts(cuts_json, camera_by_frame, duration, video1, video2)
 
         if timeline_requested:
-            report("Creating DaVinci Resolve EDL (no MP4 render)...")
-            export_resolve_edl(
-                resolve_edl,
+            report("Creating Resolve timeline XML...")
+            export_fcpxml(
+                resolve_xml,
                 camera_by_frame,
                 duration,
                 video1,
                 video2,
-                duration1,
-                duration2,
-                video2_shift,
-                default_camera,
             )
-            report(f"DaVinci Resolve EDL: {resolve_edl}")
+            report(f"Resolve XML: {resolve_xml}")
 
         if render_requested:
             report("Rendering final MP4. This may take a while...")

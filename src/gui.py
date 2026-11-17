@@ -48,8 +48,8 @@ class PodPyApp:
         )
         for row, label, value in (
             (5, "Render MP4", "render"),
-            (6, "Create Resolve timeline only", "resolve"),
-            (7, "Both MP4 and Resolve timeline", "both"),
+            (6, "Create Resolve XML only", "resolve"),
+            (7, "Both MP4 and Resolve XML", "both"),
         ):
             tk.Radiobutton(
                 container, text=label, variable=self.output_mode, value=value,
@@ -62,7 +62,7 @@ class PodPyApp:
             ("Audio track 1", "audio1", AUDIO1, "file"),
             ("Audio track 2", "audio2", AUDIO2, "file"),
             ("Rendered MP4", "output", OUTPUT, "save_video"),
-            ("Resolve EDL timeline", "resolve_edl", "podpy_resolve.edl", "save_edl"),
+            ("Resolve XML", "resolve_xml", "podpy_timeline.fcpxml", "save_xml"),
             ("Cut-list JSON", "cuts", CUTS_JSON, "save_json"),
         ]
         self.audio_widgets = []
@@ -84,7 +84,7 @@ class PodPyApp:
                 self.audio_widgets.extend(widgets)
             elif key == "output":
                 self.output_widgets["render"].extend(widgets)
-            elif key == "resolve_edl":
+            elif key == "resolve_xml":
                 self.output_widgets["resolve"].extend(widgets)
 
         self.process_button = tk.Button(
@@ -131,7 +131,7 @@ class PodPyApp:
         else:
             options = {
                 "save_video": ("Save rendered MP4 as", ".mp4", "MP4 video", "*.mp4"),
-                "save_edl": ("Save Resolve EDL as", ".edl", "CMX 3600 EDL", "*.edl"),
+                "save_xml": ("Save Resolve XML as", ".xml", "Final Cut XML", "*.xml"),
                 "save_json": ("Save camera cut list as", ".json", "JSON files", "*.json"),
             }
             title, extension, filetype, pattern = options[kind]
@@ -161,8 +161,8 @@ class PodPyApp:
             missing.extend(key for key in ("audio1", "audio2") if not values[key])
         if output_mode in ("render", "both") and not values["output"]:
             missing.append("output")
-        if output_mode in ("resolve", "both") and not values["resolve_edl"]:
-            missing.append("resolve_edl")
+        if output_mode in ("resolve", "both") and not values["resolve_xml"]:
+            missing.append("resolve_xml")
         if missing:
             messagebox.showerror(
                 "Missing file or destination",
@@ -185,7 +185,7 @@ class PodPyApp:
                     audio2=None if audio_mode == "videos_only" else values["audio2"],
                     output=values["output"] or None,
                     cuts_json=values["cuts"],
-                    resolve_edl=values["resolve_edl"] or None,
+                    resolve_xml=values["resolve_xml"] or None,
                     output_mode=output_mode,
                     on_progress=report,
                 )

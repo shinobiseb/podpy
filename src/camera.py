@@ -11,7 +11,6 @@ from config import (
     ENVELOPE_RATE,
     MAX_SILENCE_GAP_SECONDS,
     MIN_ACTIVITY_SECONDS,
-    OUTPUT_FPS,
     VIDEO,
     VIDEO2,
 )
@@ -128,86 +127,45 @@ def export_camera_cuts(path, camera_by_frame, duration, video1=VIDEO, video2=VID
     print(f"Saved {len(cuts)} camera cuts to {path}")
 
 
-def _timecode(seconds):
-    """Format non-drop-frame timecode at the configured timeline frame rate."""
-    total_frames = max(0, round(seconds * OUTPUT_FPS))
-    frames = total_frames % OUTPUT_FPS
-    total_seconds = total_frames // OUTPUT_FPS
-    ss = total_seconds % 60
-    total_minutes = total_seconds // 60
-    mm = total_minutes % 60
-    hh = total_minutes // 60
-    return f"{hh:02d}:{mm:02d}:{ss:02d}:{frames:02d}"
-
-
-def export_resolve_edl(
-    path,
-    camera_by_frame,
-    duration,
-    video1,
-    video2,
-    video1_duration,
-    video2_duration,
-    video2_shift,
-    default_camera=1,
-):
-    """Write a CMX 3600 EDL with source clip cuts and sync-adjusted source in-points.
-
-    The EDL references original files by clip name/reel comments. Resolve may
-    prompt to relink these files during import. Audio is intentionally omitted.
-    """
+def export_fcpxml(path, camera_by_frame, duration, video1=VIDEO, video2=VIDEO2):
+    """Export a pragmatic Final Cut Pro XML timeline that references both source videos."""
     if len(camera_by_frame) == 0:
         raise ValueError("No camera-selection frames were generated")
 
-    paths = {1: str(video1), 2: str(video2)}
-    durations = {1: float(video1_duration), 2: float(video2_duration)}
-    shifts = {1: 0.0, 2: float(video2_shift)}
-    segments = _cut_segments(camera_by_frame, duration)
-    lines = ["TITLE: PodPy Auto Cut", "FCM: NON-DROP FRAME", ""]
-    event_number = 1
+    fcpxml = ET.Element("fcpxml", version="1.8")
+    resources = ET.SubElement(fcpxml, "resources")
+    ET.SubElement(
+        resources, "asset", id="video1", name=Path(video1).name,
+        src=str(Path(video1).resolve())
+    )
+    ET.SubElement(
+        resources, "asset", id="video2", name=Path(video2).name,
+        src=str(Path(video2).resolve())
+    )
 
-    for segment in segments:
-        timeline_start = segment["start_seconds"]
-        timeline_end = segment["end_seconds"]
-        camera = segment["camera_number"]
+    library = ET.SubElement(fcpxml, "library")
+    event = ET.SubElement(library, "event", name="PodPy")
+    project = ET.SubElement(event, "project", name="Auto Cut")
+    sequence = ET.SubElement(project, "sequence", duration=f"{duration:.6f}s")
+    spine = ET.SubElement(sequence, "spine")
 
-        # If a selected camera has no source frames for this interval, use the
-        # longer/default camera when possible, otherwise the other valid source.
-        candidates = [camera, default_camera, 1 if camera == 2 else 2]
-        chosen = None
-        for candidate in candidates:
-            source_start = timeline_start + shifts[candidate]
-            source_end = timeline_end + shifts[candidate]
-            if source_start >= 0 and source_end <= durations[candidate]:
-                chosen = candidate
-                break
-        if chosen is None:
-            # Keep the timeline continuous by trimming the selected interval to
-            # the valid source range when a sync offset reaches a clip boundary.
-            for candidate in candidates:
-                valid_start = max(timeline_start, -shifts[candidate])
-                valid_end = min(timeline_end, durations[candidate] - shifts[candidate])
-                if valid_end - valid_start > 1.0 / OUTPUT_FPS:
-                    chosen = candidate
-                    timeline_start, timeline_end = valid_start, valid_end
-                    break
-        if chosen is None or timeline_end <= timeline_start:
-            continue
-
-        source_start = timeline_start + shifts[chosen]
-        source_end = timeline_end + shifts[chosen]
-        reel = f"CAM{chosen}"
-        lines.append(
-            f"{event_number:03d}  {reel:<8} V     C        "
-            f"{_timecode(source_start)} {_timecode(source_end)} "
-            f"{_timecode(timeline_start)} {_timecode(timeline_end)}"
+    for index, segment in enumerate(_cut_segments(camera_by_frame, duration)):
+        camera_number = segment["camera_number"]
+        clip_id = f"clip{index + 1}"
+        ref_id = "video1" if camera_number == 1 else "video2"
+        clip = ET.SubElement(
+            spine,
+            "clip",
+            id=clip_id,
+            name=f"VIDEO{camera_number} segment {index + 1}",
+            start=f"{segment['start_seconds']:.6f}s",
+            duration=f"{segment['duration_seconds']:.6f}s",
         )
-        lines.append(f"* FROM CLIP NAME: {Path(paths[chosen]).name}")
-        lines.append(f"* SOURCE FILE: {Path(paths[chosen]).resolve()}")
-        lines.append("")
-        event_number += 1
+        ET.SubElement(
+            clip, "video", ref=ref_id,
+            offset="0s", duration=f"{segment['duration_seconds']:.6f}s"
+        )
 
-    if event_number == 1:
-        raise ValueError("No valid source intervals could be written to the EDL")
-    Path(path).write_text("\n".join(lines), encoding="utf-8")
-    print(f"Saved {event_number - 1} Resolve EDL events to {path}")
+    ET.indent(fcpxml, space="  ")
+    ET.ElementTree(fcpxml).write(path, encoding="utf-8", xml_declaration=True)
+    print(f"Saved Final Cut Pro XML timeline to {path}")

@@ -18,16 +18,16 @@ def main():
     )
     parser.add_argument(
         "--output-mode", choices=OUTPUT_MODES, default="render",
-        help="Choose MP4 rendering, Resolve EDL only, or both",
+        help="Choose MP4 rendering, timeline XML only, or both",
     )
     parser.add_argument("--output", help="Rendered MP4 path (render/both mode)")
-    parser.add_argument("--resolve-edl", help="CMX 3600 EDL output path (resolve/both mode)")
+    parser.add_argument("--resolve-xml", help="Final Cut Pro XML output path (resolve/both mode)")
     parser.add_argument("--cuts-json", default=CUTS_JSON, help="Camera cut-list JSON path")
     args = parser.parse_args()
 
     output = args.output or (OUTPUT if args.output_mode in ("render", "both") else None)
-    edl = args.resolve_edl or (
-        "podpy_resolve.edl" if args.output_mode in ("resolve", "both") else None
+    timeline_xml = args.resolve_xml or (
+        "podpy_timeline.fcpxml" if args.output_mode in ("resolve", "both") else None
     )
     process_project(
         video1=args.video1,
@@ -36,7 +36,7 @@ def main():
         audio2=None if args.videos_only else args.audio2,
         output=output,
         cuts_json=args.cuts_json,
-        resolve_edl=edl,
+        resolve_xml=timeline_xml,
         output_mode=args.output_mode,
     )
 
