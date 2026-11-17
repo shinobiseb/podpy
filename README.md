@@ -1,16 +1,24 @@
 # PodPy
 
-A local desktop-friendly tool that creates an audio-driven multicamera podcast edit from two videos. It can use either two separate audio tracks or the audio embedded in the videos.
+A local multicamera editing tool that creates activity-driven cuts from two videos. It can analyze separate audio tracks or use the audio embedded in each video.
 
 ## Desktop app
 
-Launch the Tkinter interface:
+Launch the interface with:
 
 ```bash
 python src/gui.py
 ```
 
-Choose **Use two separate audio tracks** for the original workflow, or **Videos only** to extract and use each video's embedded audio for sync estimation, speaker activity, camera cuts, and the final audio mix. Both modes can export a rendered MP4, a camera cut-list JSON, and optional Final Cut Pro XML.
+Choose the audio source, then select an output workflow:
+
+- **Render MP4** — analyze, cut, and encode the finished video.
+- **Create Resolve timeline only** — analyze the audio and write a CMX 3600 EDL referencing the original camera files; skips MP4 rendering and audio mastering.
+- **Both MP4 and Resolve timeline** — produce both outputs.
+
+The EDL contains the camera edits and sync-adjusted source in-points. Import it in DaVinci Resolve using **File → Import Timeline → Import AAF, EDL, XML…** and relink the original video files if prompted. The EDL is a video-only edit; arrange/mix audio in Resolve. Resolve may present its normal media-relink dialog, and the exact menu wording can vary by version.
+
+PodPy defaults to whichever input video is longer during detected silence; equal-length clips default to Video 1. Camera 1 remains the synchronization reference and defines the output timeline duration.
 
 ## Requirements
 
@@ -24,32 +32,34 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Tkinter is included with many Python installations. On some Linux distributions it must be installed separately (for example, the `python3-tk` system package).
-
 ## Command-line mode
 
-Use the configured default paths in `src/config.py` with the original separate audio tracks:
+Render an MP4 with configured defaults:
 
 ```bash
-python src/main.py
+python src/main.py --videos-only --output-mode render --output Synced_video.mp4
 ```
 
-For two-video-only processing, provide video paths and enable embedded audio mode:
+Create only a Resolve EDL (no MP4 render):
 
 ```bash
-python src/main.py --videos-only \
-  --video1 path/to/camera1.mp4 \
-  --video2 path/to/camera2.mp4 \
-  --output Synced_video.mp4 \
-  --cuts-json camera_cuts.json
+python src/main.py --videos-only --output-mode resolve \
+  --video1 path/to/camera1.mp4 --video2 path/to/camera2.mp4 \
+  --resolve-edl podpy_resolve.edl
 ```
 
-Use `--final-cut-xml path/to/timeline.xml` to also export a Final Cut Pro XML timeline. Both videos need an audio stream with enough shared material for reliable sync estimation (at least 30 seconds of overlap by default).
+Create both outputs:
 
-## Processing notes
+```bash
+python src/main.py --videos-only --output-mode both \
+  --video1 path/to/camera1.mp4 --video2 path/to/camera2.mp4 \
+  --output Synced_video.mp4 --resolve-edl podpy_resolve.edl
+```
 
-PodPy estimates the offset between the two videos from their embedded audio. In videos-only mode, it uses camera 1 as the timeline reference and aligns camera 2's picture and audio to that timeline. Audio activity selects the camera while retaining the current shot during silence. The resulting audio is normalized as needed and mixed into the rendered video.
+Use `--audio1` and `--audio2` instead of `--videos-only` to provide separate audio. Both videos need audio with at least 30 seconds of shared material for reliable sync estimation.
 
-Rendering uses a continuous two-video overlay with timed camera-two intervals rather than splitting each video into a separate filter branch for every cut. This reduces filter buffering and memory demand on longer recordings, and output timing is fixed to the configured frame rate (30 fps). The output is currently rendered at the first video's resolution.
+## Notes
 
-FFmpeg and ffprobe are required for media inspection, audio extraction, and rendering. Temporary analysis and processed audio files are cleaned up automatically.
+The EDL uses CMX 3600 non-drop-frame timecode at the configured 30 fps, includes original clip names and source paths as comments, and intentionally omits audio so the audio mix can be arranged in Resolve. The cut list JSON is also written. Camera 1 defines the timeline duration; clips are referenced rather than transcoded in timeline-only mode.
+
+FFmpeg/ffprobe are still used for audio extraction and analysis in timeline-only mode, but no rendered video file is encoded.
