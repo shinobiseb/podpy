@@ -50,4 +50,6 @@ Use `--final-cut-xml path/to/timeline.xml` to also export a Final Cut Pro XML ti
 
 PodPy estimates the offset between the two videos from their embedded audio. In videos-only mode, it uses camera 1 as the timeline reference and aligns camera 2's picture and audio to that timeline. Audio activity selects the camera while retaining the current shot during silence. The resulting audio is normalized as needed and mixed into the rendered video.
 
+Rendering uses a continuous two-video overlay with timed camera-two intervals rather than splitting each video into a separate filter branch for every cut. This reduces filter buffering and memory demand on longer recordings, and output timing is fixed to the configured frame rate (30 fps). The output is currently rendered at the first video's resolution.
+
 FFmpeg and ffprobe are required for media inspection, audio extraction, and rendering. Temporary analysis and processed audio files are cleaned up automatically.

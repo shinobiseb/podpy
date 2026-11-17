@@ -28,8 +28,8 @@ def aligned_video_filter(input_index, shift, duration, width, height, label):
     return f"[{input_index}:v:0]{','.join(filters)}[{label}]"
 
 
-def camera_cut_filters(camera_by_frame, duration, envelope_rate):
-    """Build a concat graph switching cameras according to per-frame choices."""
+def camera_two_enable_expression(camera_by_frame, duration, envelope_rate):
+    """Build an enable expression for camera-two intervals without splitting streams."""
     frame_count = len(camera_by_frame)
     if frame_count == 0:
         raise ValueError("No camera-selection frames were generated")
@@ -40,43 +40,18 @@ def camera_cut_filters(camera_by_frame, duration, envelope_rate):
     ]
     starts = [0, *boundaries]
     ends = [*boundaries, frame_count]
+    intervals = []
 
-    count_by_camera = {
-        1: sum(camera_by_frame[start] == 1 for start in starts),
-        2: sum(camera_by_frame[start] == 2 for start in starts),
-    }
-    filters = []
-
-    for camera_number in (1, 2):
-        count = count_by_camera[camera_number]
-        if count:
-            label = f"v{camera_number}"
-            filters.append(
-                f"[{label}]split={count}"
-                + "".join(f"[{label}s{i}]" for i in range(count))
-            )
-
-    camera_indices = {1: 0, 2: 0}
-    segment_labels = []
-
-    for segment_number, (start_frame, end_frame) in enumerate(zip(starts, ends)):
+    for start_frame, end_frame in zip(starts, ends):
+        if int(camera_by_frame[start_frame]) != 2:
+            continue
         start = start_frame / envelope_rate
         end = min(end_frame / envelope_rate, duration)
-        segment_duration = end - start
-        camera_number = int(camera_by_frame[start_frame])
-        source = f"[v{camera_number}s{camera_indices[camera_number]}]"
-        camera_indices[camera_number] += 1
-        label = f"segment{segment_number}"
-        filters.append(
-            f"{source}trim=start={start:.6f}:duration={segment_duration:.6f},"
-            f"setpts=PTS-STARTPTS[{label}]"
-        )
-        segment_labels.append(f"[{label}]")
+        if end > start:
+            intervals.append(f"between(t\\,{start:.6f}\\,{end:.6f})")
 
-    filters.append(
-        f"{''.join(segment_labels)}concat=n={len(segment_labels)}:v=1:a=0[vout]"
-    )
-    return ";".join(filters)
+    # An expression that is always false leaves the base (camera-one) video visible.
+    return "+".join(intervals) if intervals else "0"
 
 
 def render_video(
@@ -94,12 +69,15 @@ def render_video(
     camera_by_frame,
     envelope_rate,
 ):
-    """Build FFmpeg filters and render the switched video."""
+    """Render the switched video using a low-memory overlay instead of stream splits."""
     audio1_filter = aligned_audio_filter(1, shift1, duration)
     audio2_filter = aligned_audio_filter(2, shift2, duration)
     video1_filter = aligned_video_filter(0, 0.0, duration, width, height, "v1")
     video2_filter = aligned_video_filter(
         3, video2_shift, duration, width, height, "v2"
+    )
+    camera_two_enable = camera_two_enable_expression(
+        camera_by_frame, duration, envelope_rate
     )
 
     filter_complex = (
@@ -112,12 +90,15 @@ def render_video(
         "[merged];"
         f"{video1_filter};"
         f"{video2_filter};"
-        f"{camera_cut_filters(camera_by_frame, duration, envelope_rate)}"
+        f"[v1][v2]overlay=eof_action=pass:shortest=0:repeatlast=0:"
+        f"enable='{camera_two_enable}',"
+        f"fps={OUTPUT_FPS},settb=1/{OUTPUT_FPS},format=yuv420p[vout]"
     )
 
     print(f"Writing {output} with activity-driven camera switching...")
     subprocess.run([
         "ffmpeg", "-y",
+        "-filter_complex_threads", "2",
         "-i", str(video1),
         "-i", str(audio1),
         "-i", str(audio2),
@@ -126,9 +107,13 @@ def render_video(
         "-map", "[vout]",
         "-map", "[merged]",
         "-t", str(duration),
+        "-r", str(OUTPUT_FPS),
+        "-fps_mode", "cfr",
         "-c:v", "libx264",
+        "-threads", "4",
         "-preset", "fast",
         "-crf", "18",
+        "-level:v", "4.1",
         "-c:a", "aac",
         "-b:a", "192k",
         "-movflags", "+faststart",
