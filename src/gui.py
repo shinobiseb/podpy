@@ -131,7 +131,7 @@ class PodPyApp:
         else:
             options = {
                 "save_video": ("Save rendered MP4 as", ".mp4", "MP4 video", "*.mp4"),
-                "save_xml": ("Save Resolve XML as", ".xml", "Final Cut XML", "*.xml"),
+                "save_xml": ("Save Resolve XML as", ".fcpxml", "Final Cut Pro XML", "*.fcpxml"),
                 "save_json": ("Save camera cut list as", ".json", "JSON files", "*.json"),
             }
             title, extension, filetype, pattern = options[kind]
