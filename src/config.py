@@ -1,10 +1,18 @@
+from pathlib import Path
+
+
+# Resolve defaults relative to the repository so the app works from any cwd.
+ROOT = Path(__file__).resolve().parent.parent
+FILES = ROOT / "src" / "files"
+
 # Media inputs and outputs
-VIDEO = "src/files/pov_seb.mp4"
-VIDEO2 = "src/files/pov_gus.mp4"
-AUDIO1 = "src/files/pod1_seb.mp3"
-AUDIO2 = "src/files/pod1_gus.mp3"
-OUTPUT = "Synced_video.mp4"
-CUTS_JSON = "test_synced_merged_cuts.json"
+VIDEO = FILES / "pov_seb.mp4"
+VIDEO2 = FILES / "pov_gus.mp4"
+AUDIO1 = FILES / "pod1_seb.mp3"
+AUDIO2 = FILES / "pod1_gus.mp3"
+OUTPUT = ROOT / "Synced_video.mp4"
+CUTS_JSON = ROOT / "test_synced_merged_cuts.json"
+FINAL_CUT_XML = ROOT / "Synced_video.fcpxml"
 
 # Sync analysis
 ANALYSIS_SECONDS = 300
