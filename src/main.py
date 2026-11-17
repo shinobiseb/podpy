@@ -13,15 +13,21 @@ def main():
     parser.add_argument("--audio1", default=AUDIO1, help="Separate audio track 1")
     parser.add_argument("--audio2", default=AUDIO2, help="Separate audio track 2")
     parser.add_argument(
-        "--videos-only", action="store_true",
+        "--videos-only",
+        action="store_true",
         help="Use audio embedded in each video instead of separate audio files",
     )
     parser.add_argument(
-        "--output-mode", choices=OUTPUT_MODES, default="render",
+        "--output-mode",
+        choices=OUTPUT_MODES,
+        default="render",
         help="Choose MP4 rendering, timeline XML only, or both",
     )
     parser.add_argument("--output", help="Rendered MP4 path (render/both mode)")
-    parser.add_argument("--resolve-xml", help="Final Cut Pro XML output path (resolve/both mode)")
+    parser.add_argument(
+        "--resolve-xml",
+        help="Final Cut Pro XML output path (resolve/both mode)",
+    )
     parser.add_argument("--cuts-json", default=CUTS_JSON, help="Camera cut-list JSON path")
     args = parser.parse_args()
 
@@ -29,6 +35,7 @@ def main():
     timeline_xml = args.resolve_xml or (
         "podpy_timeline.fcpxml" if args.output_mode in ("resolve", "both") else None
     )
+
     process_project(
         video1=args.video1,
         video2=args.video2,
