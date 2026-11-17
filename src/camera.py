@@ -11,6 +11,7 @@ from config import (
     ENVELOPE_RATE,
     MAX_SILENCE_GAP_SECONDS,
     MIN_ACTIVITY_SECONDS,
+    OUTPUT_FPS,
     VIDEO,
     VIDEO2,
 )
@@ -127,45 +128,135 @@ def export_camera_cuts(path, camera_by_frame, duration, video1=VIDEO, video2=VID
     print(f"Saved {len(cuts)} camera cuts to {path}")
 
 
-def export_fcpxml(path, camera_by_frame, duration, video1=VIDEO, video2=VIDEO2):
-    """Export a pragmatic Final Cut Pro XML timeline that references both source videos."""
+def _frame_time(frame_number):
+    """Format a frame index as an FCPXML rational time at the project rate."""
+    return f"{max(0, int(frame_number))}/{OUTPUT_FPS}s"
+
+
+def export_fcpxml(
+    path,
+    camera_by_frame,
+    duration,
+    video1=VIDEO,
+    video2=VIDEO2,
+    video1_duration=None,
+    video2_duration=None,
+    video2_shift=0.0,
+    width=1920,
+    height=1080,
+):
+    """Write a Resolve-importable FCPXML sequence with valid source references."""
     if len(camera_by_frame) == 0:
         raise ValueError("No camera-selection frames were generated")
 
+    sources = {
+        1: (Path(video1).expanduser().resolve(), float(video1_duration or duration), 0.0, "r2"),
+        2: (Path(video2).expanduser().resolve(), float(video2_duration or duration), float(video2_shift), "r3"),
+    }
+    project_frames = max(1, round(duration * OUTPUT_FPS))
     fcpxml = ET.Element("fcpxml", version="1.8")
     resources = ET.SubElement(fcpxml, "resources")
     ET.SubElement(
-        resources, "asset", id="video1", name=Path(video1).name,
-        src=str(Path(video1).resolve())
+        resources,
+        "format",
+        id="r1",
+        name=f"FFVideoFormat{height}p{OUTPUT_FPS}",
+        frameDuration=f"1/{OUTPUT_FPS}s",
+        width=str(width),
+        height=str(height),
     )
-    ET.SubElement(
-        resources, "asset", id="video2", name=Path(video2).name,
-        src=str(Path(video2).resolve())
-    )
+    for source, source_duration, _shift, asset_id in sources.values():
+        ET.SubElement(
+            resources,
+            "asset",
+            id=asset_id,
+            name=source.name,
+            src=source.as_uri(),
+            start="0s",
+            duration=_frame_time(round(source_duration * OUTPUT_FPS)),
+            hasVideo="1",
+            hasAudio="1",
+            format="r1",
+        )
 
     library = ET.SubElement(fcpxml, "library")
     event = ET.SubElement(library, "event", name="PodPy")
-    project = ET.SubElement(event, "project", name="Auto Cut")
-    sequence = ET.SubElement(project, "sequence", duration=f"{duration:.6f}s")
+    project = ET.SubElement(event, "project", name="PodPy Auto Cut")
+    sequence = ET.SubElement(
+        project,
+        "sequence",
+        format="r1",
+        duration=_frame_time(project_frames),
+        tcStart="0s",
+        tcFormat="NDF",
+        audioLayout="stereo",
+        audioRate="48k",
+    )
     spine = ET.SubElement(sequence, "spine")
 
-    for index, segment in enumerate(_cut_segments(camera_by_frame, duration)):
-        camera_number = segment["camera_number"]
-        clip_id = f"clip{index + 1}"
-        ref_id = "video1" if camera_number == 1 else "video2"
-        clip = ET.SubElement(
-            spine,
-            "clip",
-            id=clip_id,
-            name=f"VIDEO{camera_number} segment {index + 1}",
-            start=f"{segment['start_seconds']:.6f}s",
-            duration=f"{segment['duration_seconds']:.6f}s",
-        )
+    timeline_cursor = 0
+    for segment_number, segment in enumerate(_cut_segments(camera_by_frame, duration), start=1):
+        segment_start = max(0, round(segment["start_seconds"] * OUTPUT_FPS))
+        segment_end = min(project_frames, round(segment["end_seconds"] * OUTPUT_FPS))
+        if segment_end <= segment_start:
+            continue
+        camera = segment["camera_number"]
+        source, source_duration, shift, asset_id = sources[camera]
+        shift_frames = round(shift * OUTPUT_FPS)
+        source_end = round(source_duration * OUTPUT_FPS)
+        valid_start = max(segment_start, -shift_frames)
+        valid_end = min(segment_end, source_end - shift_frames)
+
+        if valid_start > timeline_cursor:
+            ET.SubElement(
+                spine,
+                "gap",
+                name="Unavailable source frames",
+                offset=_frame_time(timeline_cursor),
+                duration=_frame_time(valid_start - timeline_cursor),
+            )
+            timeline_cursor = valid_start
+        if valid_end > valid_start:
+            if valid_start > timeline_cursor:
+                ET.SubElement(
+                    spine,
+                    "gap",
+                    name="Timeline gap",
+                    offset=_frame_time(timeline_cursor),
+                    duration=_frame_time(valid_start - timeline_cursor),
+                )
+                timeline_cursor = valid_start
+            clip_frames = valid_end - valid_start
+            source_start = valid_start + shift_frames
+            ET.SubElement(
+                spine,
+                "asset-clip",
+                name=f"VIDEO{camera} segment {segment_number}",
+                ref=asset_id,
+                offset=_frame_time(timeline_cursor),
+                start=_frame_time(source_start),
+                duration=_frame_time(clip_frames),
+            )
+            timeline_cursor += clip_frames
+        if timeline_cursor < segment_end:
+            ET.SubElement(
+                spine,
+                "gap",
+                name="Unavailable source frames",
+                offset=_frame_time(timeline_cursor),
+                duration=_frame_time(segment_end - timeline_cursor),
+            )
+            timeline_cursor = segment_end
+
+    if timeline_cursor < project_frames:
         ET.SubElement(
-            clip, "video", ref=ref_id,
-            offset="0s", duration=f"{segment['duration_seconds']:.6f}s"
+            spine,
+            "gap",
+            name="End of timeline",
+            offset=_frame_time(timeline_cursor),
+            duration=_frame_time(project_frames - timeline_cursor),
         )
 
     ET.indent(fcpxml, space="  ")
     ET.ElementTree(fcpxml).write(path, encoding="utf-8", xml_declaration=True)
-    print(f"Saved Final Cut Pro XML timeline to {path}")
+    print(f"Saved FCPXML timeline to {path}")
