@@ -1,16 +1,16 @@
 # PodPy
 
-A local desktop-friendly tool that creates an audio-driven multicamera podcast edit from two videos and two separate audio tracks.
+A local desktop-friendly tool that creates an audio-driven multicamera podcast edit from two videos. It can use either two separate audio tracks or the audio embedded in the videos.
 
 ## Desktop app
 
-The simple Tkinter interface lets you browse for both video files, both audio tracks, and choose where the rendered MP4 and camera cut-list JSON should be saved. Processing runs locally on your computer.
+Launch the Tkinter interface:
 
 ```bash
 python src/gui.py
 ```
 
-Select the four inputs and output destinations, then click **Process video**. The app checks/normalizes the audio as needed, estimates sync, chooses camera cuts from mic activity, and renders the output. Keep the app open until rendering finishes.
+Choose **Use two separate audio tracks** for the original workflow, or **Videos only** to extract and use each video's embedded audio for sync estimation, speaker activity, camera cuts, and the final audio mix. Both modes can export a rendered MP4, a camera cut-list JSON, and optional Final Cut Pro XML.
 
 ## Requirements
 
@@ -28,14 +28,26 @@ Tkinter is included with many Python installations. On some Linux distributions 
 
 ## Command-line mode
 
-To run with the default file paths configured in `src/config.py`:
+Use the configured default paths in `src/config.py` with the original separate audio tracks:
 
 ```bash
 python src/main.py
 ```
 
+For two-video-only processing, provide video paths and enable embedded audio mode:
+
+```bash
+python src/main.py --videos-only \
+  --video1 path/to/camera1.mp4 \
+  --video2 path/to/camera2.mp4 \
+  --output Synced_video.mp4 \
+  --cuts-json camera_cuts.json
+```
+
+Use `--final-cut-xml path/to/timeline.xml` to also export a Final Cut Pro XML timeline. Both videos need an audio stream with enough shared material for reliable sync estimation (at least 30 seconds of overlap by default).
+
 ## Processing notes
 
-The app checks integrated loudness and true peak. Tracks outside the configured target are processed with a gate, high-pass/EQ, compressor, and loudness normalization. These are starting values; adjust them in `src/config.py` for your microphones and room. Loudness checking does not prove that the filters were previously applied.
+PodPy estimates the offset between the two videos from their embedded audio. In videos-only mode, it uses camera 1 as the timeline reference and aligns camera 2's picture and audio to that timeline. Audio activity selects the camera while retaining the current shot during silence. The resulting audio is normalized as needed and mixed into the rendered video.
 
-The video and cut list are written to the destinations selected in the app. Temporary analysis and processed audio files are cleaned up automatically.
+FFmpeg and ffprobe are required for media inspection, audio extraction, and rendering. Temporary analysis and processed audio files are cleaned up automatically.

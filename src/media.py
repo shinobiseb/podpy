@@ -4,7 +4,7 @@ import wave
 
 import numpy as np
 
-from config import ANALYSIS_SAMPLE_RATE, ANALYSIS_SECONDS
+from config import ANALYSIS_SAMPLE_RATE, ANALYSIS_SECONDS, OUTPUT_AUDIO_RATE
 
 
 def run(args):
@@ -56,6 +56,20 @@ def extract_analysis_wav(source, output):
         "-ac", "1",
         "-ar", str(ANALYSIS_SAMPLE_RATE),
         "-c:a", "pcm_s16le",
+        str(output),
+    ])
+
+
+def extract_audio_track(source, output):
+    """Extract a full-length stereo audio track for processing and rendering."""
+    run([
+        "ffmpeg", "-y", "-v", "error",
+        "-i", str(source),
+        "-map", "0:a:0",
+        "-vn",
+        "-ac", "2",
+        "-ar", str(OUTPUT_AUDIO_RATE),
+        "-c:a", "pcm_s24le",
         str(output),
     ])
 
