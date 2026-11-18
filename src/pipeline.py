@@ -1,12 +1,19 @@
+import json
+import shutil
 import subprocess
 import tempfile
-import shutil
 from pathlib import Path
 
 from audio import prepare_audio
 from camera import choose_camera_by_activity, export_camera_cuts, export_fcpxml
 from config import ENVELOPE_RATE, MIN_CORRELATION
-from media import extract_analysis_wav, extract_audio_track, probe_duration, probe_video_size
+from media import (
+    extract_analysis_wav,
+    extract_audio_track,
+    probe_duration,
+    probe_video_size,
+    require_media_tools,
+)
 from rendering import render_video
 from sync import estimate_and_check
 
@@ -49,6 +56,9 @@ def process_project(
             resolve_xml = resolve_xml[:-4]
             report(f"Removing duplicate XML suffix; saving as: {resolve_xml}")
 
+    report("Checking FFmpeg and ffprobe...")
+    require_media_tools()
+
     for path in (video1, video2):
         if not Path(path).is_file():
             raise FileNotFoundError(f"Input video not found: {path}")
@@ -80,22 +90,21 @@ def process_project(
             activity_audio1 = temp_dir / "audio1_analysis.wav"
             activity_audio2 = temp_dir / "audio2_analysis.wav"
 
-        # Resolve needs audio files that remain available after this temporary
-        # workspace is deleted. Store these beside the XML in a companion folder.
+        # Keep Resolve assets outside the temporary workspace so the XML remains usable.
         if timeline_requested:
             xml_path = Path(resolve_xml).expanduser().resolve()
             audio_assets_dir = xml_path.parent / f"{xml_path.stem}_media"
             audio_assets_dir.mkdir(parents=True, exist_ok=True)
-            processed1_path = audio_assets_dir / "processed_audio1.wav"
-            processed2_path = audio_assets_dir / "processed_audio2.wav"
+            processed1_path = audio_assets_dir / "processed_audio1.flac"
+            processed2_path = audio_assets_dir / "processed_audio2.flac"
         else:
-            processed1_path = temp_dir / "audio1_processed.wav"
-            processed2_path = temp_dir / "audio2_processed.wav"
+            processed1_path = temp_dir / "audio1_processed.flac"
+            processed2_path = temp_dir / "audio2_processed.flac"
 
         if video_only_mode:
             report("Preparing embedded audio for output...")
-            embedded_audio1 = temp_dir / "video1_embedded_audio.wav"
-            embedded_audio2 = temp_dir / "video2_embedded_audio.wav"
+            embedded_audio1 = temp_dir / "video1_embedded_audio.flac"
+            embedded_audio2 = temp_dir / "video2_embedded_audio.flac"
             try:
                 extract_audio_track(video1, embedded_audio1)
                 extract_audio_track(video2, embedded_audio2)
@@ -111,9 +120,7 @@ def process_project(
         prepared_audio1 = Path(prepare_audio(audio_source1, processed1_path)).resolve()
         prepared_audio2 = Path(prepare_audio(audio_source2, processed2_path)).resolve()
         if timeline_requested:
-            # prepare_audio may return its input unchanged when it already meets
-            # targets. Copy it out of the temporary directory and use a stable
-            # companion asset path in the XML either way.
+            # prepare_audio returns its input when the audio already meets targets.
             if prepared_audio1 != processed1_path.resolve():
                 shutil.copy2(prepared_audio1, processed1_path)
             if prepared_audio2 != processed2_path.resolve():
@@ -146,7 +153,9 @@ def process_project(
             ) from exc
 
         report("Estimating sync offsets...")
-        video2_shift = estimate_and_check(video1_wav, video2_wav, "VIDEO2", MIN_CORRELATION)
+        video2_shift = estimate_and_check(
+            video1_wav, video2_wav, "VIDEO2", MIN_CORRELATION
+        )
         if video_only_mode:
             audio2_shift = video2_shift
         else:
@@ -159,7 +168,11 @@ def process_project(
 
         report("Selecting camera cuts...")
         camera_by_frame = choose_camera_by_activity(
-            activity_audio1, activity_audio2, audio1_shift, audio2_shift, duration,
+            activity_audio1,
+            activity_audio2,
+            audio1_shift,
+            audio2_shift,
+            duration,
             default_camera=default_camera,
         )
         export_camera_cuts(cuts_json, camera_by_frame, duration, video1, video2)

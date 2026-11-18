@@ -1,10 +1,23 @@
 import json
+import shutil
 import subprocess
 import wave
 
 import numpy as np
 
 from config import ANALYSIS_SAMPLE_RATE, ANALYSIS_SECONDS, OUTPUT_AUDIO_RATE
+
+
+def require_media_tools():
+    """Fail early with a useful message when FFmpeg is unavailable."""
+    missing = [tool for tool in ("ffmpeg", "ffprobe") if shutil.which(tool) is None]
+    if missing:
+        names = " and ".join(missing)
+        raise SystemExit(
+            f"Required media tool(s) not found on PATH: {names}. "
+            "Install FFmpeg (including ffprobe), add it to PATH, then reopen "
+            "your terminal."
+        )
 
 
 def run(args):
@@ -48,6 +61,7 @@ def probe_video_size(path):
 
 
 def extract_analysis_wav(source, output):
+    """Extract a short mono WAV for sync/activity analysis."""
     run([
         "ffmpeg", "-y", "-v", "error",
         "-i", str(source),
@@ -61,7 +75,7 @@ def extract_analysis_wav(source, output):
 
 
 def extract_audio_track(source, output):
-    """Extract a full-length stereo audio track for processing and rendering."""
+    """Extract a full-length stereo audio track as lossless FLAC."""
     run([
         "ffmpeg", "-y", "-v", "error",
         "-i", str(source),
@@ -69,7 +83,8 @@ def extract_audio_track(source, output):
         "-vn",
         "-ac", "2",
         "-ar", str(OUTPUT_AUDIO_RATE),
-        "-c:a", "pcm_s24le",
+        "-c:a", "flac",
+        "-compression_level", "5",
         str(output),
     ])
 

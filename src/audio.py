@@ -52,7 +52,7 @@ def measure_loudness(path):
 
 
 def process_audio(path, output_path):
-    """Apply voice cleanup and loudness normalization to an audio track."""
+    """Apply voice cleanup and loudness normalization, storing lossless FLAC."""
     filters = (
         f"agate=threshold={GATE_THRESHOLD}:ratio={GATE_RATIO}:"
         f"attack={GATE_ATTACK_MS}:release={GATE_RELEASE_MS}:range={GATE_RANGE},"
@@ -70,7 +70,8 @@ def process_audio(path, output_path):
         "-i", str(path),
         "-map", "0:a:0",
         "-af", filters,
-        "-c:a", "pcm_s24le",
+        "-c:a", "flac",
+        "-compression_level", "5",
         str(output_path),
     ])
 
@@ -99,7 +100,7 @@ def prepare_audio(path, processed_path):
 
 
 def aligned_audio_filter(input_index, shift, duration):
-    """Build the filter that aligns an external audio track to VIDEO's timeline."""
+    """Build the FFmpeg filter that aligns an external audio track."""
     filters = ["asetpts=PTS-STARTPTS"]
 
     if shift >= 0:
