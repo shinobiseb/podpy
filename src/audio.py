@@ -45,7 +45,7 @@ def measure_loudness(path):
         r'\{\s*"input_i".*?\}', result.stderr, flags=re.DOTALL
     )
     if not matches:
-        raise RuntimeError(f"Could not read loudness measurement for {path}")
+        raise RuntimeError("Could not read loudness measurement for {path}")
 
     stats = json.loads(matches[-1])
     return float(stats["input_i"]), float(stats["input_tp"])
@@ -70,7 +70,8 @@ def process_audio(path, output_path):
         "-i", str(path),
         "-map", "0:a:0",
         "-af", filters,
-        "-c:a", "pcm_s24le",
+        "-c:a", "flac",
+        "-compression_level", "5",
         str(output_path),
     ])
 

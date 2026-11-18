@@ -34,8 +34,8 @@ def process_project(
     report("Preparing audio tracks (loudness check and processing if needed)...")
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_dir = Path(temp_dir)
-        prepared_audio1 = prepare_audio(audio1, temp_dir / "audio1_processed.wav")
-        prepared_audio2 = prepare_audio(audio2, temp_dir / "audio2_processed.wav")
+        prepared_audio1 = prepare_audio(audio1, temp_dir / "audio1_processed.flac")
+        prepared_audio2 = prepare_audio(audio2, temp_dir / "audio2_processed.flac")
 
         report("Inspecting reference video...")
         duration = probe_duration(video1)
