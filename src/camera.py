@@ -11,10 +11,19 @@ from config import (
     ENVELOPE_RATE,
     MAX_SILENCE_GAP_SECONDS,
     MIN_ACTIVITY_SECONDS,
+    ROOT,
     VIDEO,
     VIDEO2,
 )
 from media import read_pcm16_wav
+
+
+def _repo_relative_path(path):
+    """Return a repo-local path when possible, otherwise fall back to an absolute path."""
+    try:
+        return Path(path).resolve().relative_to(ROOT).as_posix()
+    except ValueError:
+        return str(Path(path).resolve())
 
 
 def _filter_short_runs(mask, value, max_length, replacement):
@@ -126,7 +135,10 @@ def export_camera_cuts(path, camera_by_frame, duration, video1=VIDEO, video2=VID
     data = {
         "video_duration_seconds": round(duration, 3),
         "envelope_rate": ENVELOPE_RATE,
-        "camera_sources": {"VIDEO1": str(video1), "VIDEO2": str(video2)},
+        "camera_sources": {
+            "VIDEO1": _repo_relative_path(video1),
+            "VIDEO2": _repo_relative_path(video2),
+        },
         "cuts": cuts,
     }
     with open(path, "w", encoding="utf-8") as json_file:
@@ -136,7 +148,7 @@ def export_camera_cuts(path, camera_by_frame, duration, video1=VIDEO, video2=VID
 
 
 def export_fcpxml(path, camera_by_frame, duration, video1=VIDEO, video2=VIDEO2):
-    """Export a simplified Final Cut Pro XML cut list for a compatible editor imports."""
+    """Export a simplified Final Cut Pro XML cut list for a compatible editor import."""
     if len(camera_by_frame) == 0:
         raise ValueError("No camera-selection frames were generated")
 

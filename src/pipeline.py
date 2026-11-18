@@ -5,7 +5,7 @@ from pathlib import Path
 from audio import prepare_audio
 from camera import choose_camera_by_activity, export_camera_cuts, export_fcpxml
 from config import ENVELOPE_RATE, MIN_CORRELATION
-from media import extract_analysis_wav, probe_duration, probe_video_size
+from media import extract_analysis_wav, probe_duration, probe_video_size, require_media_tools
 from rendering import render_video
 from sync import estimate_and_check
 
@@ -20,11 +20,14 @@ def process_project(
     final_cut_xml=None,
     on_progress=None,
 ):
-    """Run the sync, camera-select, render, and optional Final Cut Pro XML export workflow."""
+    """Run sync, camera selection, rendering, and optional FCPXML export."""
     def report(message):
         print(message)
         if on_progress:
             on_progress(message)
+
+    report("Checking FFmpeg and ffprobe...")
+    require_media_tools()
 
     inputs = (video1, video2, audio1, audio2)
     for path in inputs:

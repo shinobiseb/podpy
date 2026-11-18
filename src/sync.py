@@ -33,12 +33,7 @@ def rms_envelope(path):
 
 
 def estimate_shift(reference_wav, target_wav):
-    """
-    Return (shift_seconds, correlation).
-
-    Positive shift means matching content occurs later in the target.
-    Negative shift means matching content occurs earlier in the target.
-    """
+    """Return (shift_seconds, correlation)."""
     ref = rms_envelope(reference_wav)
     target = rms_envelope(target_wav)
 

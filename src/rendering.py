@@ -79,6 +79,20 @@ def camera_cut_filters(camera_by_frame, duration, envelope_rate):
     return ";".join(filters)
 
 
+def _video_encoder_args():
+    """Prefer NVIDIA hardware encoding; use x264 when NVENC is unavailable."""
+    result = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-encoders"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    if "h264_nvenc" in result.stdout:
+        return ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "20", "-b:v", "0"]
+    print("h264_nvenc is unavailable; using the libx264 software encoder.")
+    return ["-c:v", "libx264", "-preset", "fast", "-crf", "18"]
+
+
 def render_video(
     video1,
     audio1,
@@ -115,8 +129,7 @@ def render_video(
         f"{camera_cut_filters(camera_by_frame, duration, envelope_rate)}"
     )
 
-    print(f"Writing {output} with activity-driven camera switching...")
-    subprocess.run([
+    command = [
         "ffmpeg", "-y",
         "-i", str(video1),
         "-i", str(audio1),
@@ -126,11 +139,12 @@ def render_video(
         "-map", "[vout]",
         "-map", "[merged]",
         "-t", str(duration),
-        "-c:v", "libx264",
-        "-preset", "fast",
-        "-crf", "18",
+        *_video_encoder_args(),
         "-c:a", "aac",
         "-b:a", "192k",
         "-movflags", "+faststart",
         str(output),
-    ], check=True)
+    ]
+
+    print(f"Writing {output} with activity-driven camera switching...")
+    subprocess.run(command, check=True)

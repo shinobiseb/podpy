@@ -1,10 +1,23 @@
 import json
+import shutil
 import subprocess
 import wave
 
 import numpy as np
 
 from config import ANALYSIS_SAMPLE_RATE, ANALYSIS_SECONDS
+
+
+def require_media_tools():
+    """Fail early with a useful message when FFmpeg is unavailable."""
+    missing = [tool for tool in ("ffmpeg", "ffprobe") if shutil.which(tool) is None]
+    if missing:
+        names = " and ".join(missing)
+        raise SystemExit(
+            f"Required media tool(s) not found on PATH: {names}. "
+            "Install FFmpeg (including ffprobe), add it to PATH, then reopen "
+            "your terminal."
+        )
 
 
 def run(args):

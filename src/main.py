@@ -1,4 +1,12 @@
-from config import AUDIO1, AUDIO2, CUTS_JSON, OUTPUT, VIDEO, VIDEO2
+from config import (
+    AUDIO1,
+    AUDIO2,
+    CUTS_JSON,
+    FINAL_CUT_XML,
+    OUTPUT,
+    VIDEO,
+    VIDEO2,
+)
 from pipeline import process_project
 
 
@@ -10,6 +18,7 @@ def main():
         audio2=AUDIO2,
         output=OUTPUT,
         cuts_json=CUTS_JSON,
+        final_cut_xml=FINAL_CUT_XML,
     )
 
 

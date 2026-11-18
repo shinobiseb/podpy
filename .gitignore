@@ -9,3 +9,10 @@ npm-debug.log
 /src/files/*.mp3
 /src/files/*.mp4
 /src/files/
+__pycache__/
+*.py[cod]
+*.wav
+Synced_video.mp4
+test_synced_merged_cuts.json
+Synced_video.fcpxml
+Thumbs.db
